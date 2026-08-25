@@ -89,20 +89,55 @@
     <div id="costcenter-list"></div>
   </section>
 
+  <!-- ============ PROJEKTE VIEW ============ -->
+  <section class="view" id="view-projects">
+    <div class="section-label mb-0">Projekte</div>
+    <p class="hint" style="margin:6px 2px 16px;">
+      Lege hier Projekte an, auf die du Arbeitszeit verteilen möchtest – unabhängig von den
+      Kostenstellen. Jedes Projekt erscheint als eigene Spalte bzw. eigenes Arbeitsblatt im
+      Excel-Export.
+    </p>
+
+    <form id="form-project">
+      <div class="field-row">
+        <div class="field" style="flex:0 0 90px;">
+          <label for="pr-code">Kürzel</label>
+          <input type="text" id="pr-code" maxlength="10" placeholder="z. B. WEB" required />
+        </div>
+        <div class="field" style="flex:1;">
+          <label for="pr-name">Name</label>
+          <input type="text" id="pr-name" placeholder="z. B. Website Relaunch" required />
+        </div>
+      </div>
+      <button type="submit" class="btn btn-secondary btn-block">+ Projekt hinzufügen</button>
+    </form>
+
+    <div class="spacer-24"></div>
+    <div id="project-list"></div>
+  </section>
+
   <!-- ============ EXPORT VIEW ============ -->
   <section class="view" id="view-export">
     <div class="section-label mb-0">Export</div>
 
     <div class="stat-grid" id="export-stats"></div>
 
-    <button class="btn btn-primary btn-block" id="btn-export" style="margin-top:18px;">
+    <div class="field" style="margin-top:16px;">
+      <label for="employee-name">Name (erscheint im Kopf jedes Monatsblatts)</label>
+      <input type="text" id="employee-name" placeholder="z. B. Matthi Mustermann" />
+    </div>
+
+    <button class="btn btn-primary btn-block" id="btn-export" style="margin-top:6px;">
       ⬇ Excel-Datei erstellen
     </button>
 
     <div class="export-note">
-      Der Export enthält ein Arbeitsblatt <b>„Gesamt“</b> mit allen Tagen, je ein Arbeitsblatt pro
-      Kostenstelle/Kunde sowie ein separates Arbeitsblatt <b>„Labor“</b> für die unabhängig erfasste
-      Laborzeit. Alle Zeiten in Stunden als Dezimalzahl (z. B. 7,50).
+      Der Export enthält zuerst eine <b>„Übersicht“</b> mit Jahres-Soll/Ist für Arbeitszeit und
+      Urlaub, danach ein einziges Arbeitsblatt <b>„Monatsblätter“</b> mit zwölf gestapelten
+      Monatstabellen im Arbeitsbericht-Format (inkl. Tätigkeit und Geschäftsstellen-Kürzel je
+      Tag), dann <b>„Gesamt“</b> (alle Tage flach mit Kostenstellen-/Projekt-Spalten), danach je
+      ein Arbeitsblatt pro <b>Kostenstelle</b> (mit den Projekten darin als Unterpunkte
+      gruppiert) und zuletzt <b>„Labor“</b> für die unabhängig erfasste Laborzeit.
     </div>
 
     <div class="section-label">Daten</div>
@@ -126,7 +161,10 @@
       <span class="ic">📋</span><span class="lb">Einträge</span>
     </button>
     <button class="tab-btn" data-view="view-costcenters">
-      <span class="ic">🏷</span><span class="lb">Kostenstellen</span>
+      <span class="ic">🏷</span><span class="lb">Kosten</span>
+    </button>
+    <button class="tab-btn" data-view="view-projects">
+      <span class="ic">📁</span><span class="lb">Projekte</span>
     </button>
     <button class="tab-btn" data-view="view-export">
       <span class="ic">⬇</span><span class="lb">Export</span>
@@ -198,7 +236,15 @@
       Aufteilung später ergänzen.
     </p>
 
-    <div class="section-label">Laborzeit (unabhängig von Kostenstelle)</div>
+    <div class="section-label">Projekte (unabhängig von Kostenstelle)</div>
+    <div id="alloc-project-rows"></div>
+    <div class="hint" id="alloc-project-remaining-hint"></div>
+    <p class="hint" id="alloc-no-project" style="display:none;">
+      Noch keine Projekte angelegt. Du kannst das im Tab „Projekte“ nachholen und die Aufteilung
+      später ergänzen.
+    </p>
+
+    <div class="section-label">Laborzeit (unabhängig von Kostenstelle &amp; Projekt)</div>
     <div class="alloc-row">
       <span class="alloc-swatch" style="background:var(--teal);"></span>
       <span class="alloc-name">Labor-Anteil</span>
