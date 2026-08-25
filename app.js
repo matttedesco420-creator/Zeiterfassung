@@ -7,7 +7,7 @@ const K = {
   entries: "azt_entries_v1",
   costCenters: "azt_costcenters_v1",
   projects: "azt_projects_v1",
-  employeeName: "azt_employeename_v1",
+  profile: "azt_profile_v1",
   timer: "azt_timer_v1",
 };
 
@@ -111,8 +111,26 @@ function loadProjects() {
 }
 function saveProjects(list) { localStorage.setItem(K.projects, JSON.stringify(list)); }
 
-function loadEmployeeName() { return localStorage.getItem(K.employeeName) || ""; }
-function saveEmployeeName(v) { localStorage.setItem(K.employeeName, v || ""); }
+function loadProfile() {
+  try {
+    const p = JSON.parse(localStorage.getItem(K.profile));
+    if (p) return { firstName: "", lastName: "", weeklyHours: null, vacationDaysPerYear: null, ...p };
+  } catch { /* fall through */ }
+  // Migration: if an old single "employee name" value exists from an earlier version, split it once.
+  const legacy = localStorage.getItem("azt_employeename_v1");
+  if (legacy) {
+    const parts = legacy.trim().split(/\s+/);
+    const migrated = {
+      firstName: parts.slice(0, -1).join(" ") || parts[0] || "",
+      lastName: parts.length > 1 ? parts[parts.length - 1] : "",
+      weeklyHours: null, vacationDaysPerYear: null,
+    };
+    saveProfile(migrated);
+    return migrated;
+  }
+  return { firstName: "", lastName: "", weeklyHours: null, vacationDaysPerYear: null };
+}
+function saveProfile(p) { localStorage.setItem(K.profile, JSON.stringify(p)); }
 
 /* Austrian month labels used for the Übersicht header row and the Monatsblatt sheet names */
 const MONTHS_AT = [
@@ -145,9 +163,280 @@ let entries = loadEntries();
 let costCenters = loadCostCenters();
 let projects = loadProjects();
 let timer = loadTimer();
+let profile = loadProfile();
 let tickHandle = null;
 
 let flow = { mode: null, editingId: null, draft: null }; // shared draft used by the two sheets
+
+/* =========================================================
+   SUPABASE SYNC LAYER (optional — only active if config.js has
+   real credentials; otherwise the app stays purely local, exactly
+   as before).
+   ========================================================= */
+const SB = (window.SUPABASE_CONFIG && window.SUPABASE_CONFIG.url && window.SUPABASE_CONFIG.anonKey)
+  ? supabase.createClient(window.SUPABASE_CONFIG.url, window.SUPABASE_CONFIG.anonKey, {
+      auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true },
+    })
+  : null;
+
+let currentUser = null;
+let realtimeChannel = null;
+let appInitialized = false;
+let authMode = "login";
+let pendingRetries = [];
+
+function queueRetry(fn) { pendingRetries.push(fn); }
+async function flushRetries() {
+  if (!navigator.onLine || pendingRetries.length === 0) return;
+  const jobs = pendingRetries;
+  pendingRetries = [];
+  for (const job of jobs) {
+    try { await job(); } catch { pendingRetries.push(job); }
+  }
+}
+function debounce(fn, wait) {
+  let t;
+  return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), wait); };
+}
+
+/* ---- row <-> app-object mappers ---- */
+function rowToCostCenter(row) {
+  return { id: row.id, code: row.code, name: row.name, colorIndex: row.color_index };
+}
+function costCenterToRow(cc) {
+  return { id: cc.id, user_id: currentUser.id, code: cc.code, name: cc.name, color_index: cc.colorIndex };
+}
+function rowToProject(row) {
+  return { id: row.id, code: row.code, name: row.name, colorIndex: row.color_index, costCenterId: row.cost_center_id };
+}
+function projectToRow(pr) {
+  return { id: pr.id, user_id: currentUser.id, code: pr.code, name: pr.name, color_index: pr.colorIndex, cost_center_id: pr.costCenterId || null };
+}
+function rowToEntry(row) {
+  return {
+    id: row.id, date: row.date, start: row.start, end: row.end,
+    pauseStart: row.pause_start, pauseEnd: row.pause_end, activity: row.activity,
+    totalMinutes: row.total_minutes, allocations: row.allocations || [],
+    projectAllocations: row.project_allocations || [], laborMinutes: row.labor_minutes,
+    source: row.source,
+    createdAt: row.created_at ? new Date(row.created_at).getTime() : Date.now(),
+    updatedAt: row.updated_at ? new Date(row.updated_at).getTime() : Date.now(),
+  };
+}
+function entryToRow(e) {
+  return {
+    id: e.id, user_id: currentUser.id, date: e.date, start: e.start, end: e.end,
+    pause_start: e.pauseStart, pause_end: e.pauseEnd, activity: e.activity,
+    total_minutes: e.totalMinutes, allocations: e.allocations || [],
+    project_allocations: e.projectAllocations || [], labor_minutes: e.laborMinutes,
+    source: e.source, updated_at: new Date().toISOString(),
+  };
+}
+
+/* ---- push/delete helpers (fire-and-forget, queue on failure) ---- */
+async function pushCostCenter(cc) {
+  if (!SB || !currentUser) return;
+  const { error } = await SB.from("cost_centers").upsert(costCenterToRow(cc));
+  if (error) queueRetry(() => pushCostCenter(cc));
+}
+async function deleteCostCenterRemote(id) {
+  if (!SB || !currentUser) return;
+  const { error } = await SB.from("cost_centers").delete().eq("id", id);
+  if (error) queueRetry(() => deleteCostCenterRemote(id));
+}
+async function pushProject(pr) {
+  if (!SB || !currentUser) return;
+  const { error } = await SB.from("projects").upsert(projectToRow(pr));
+  if (error) queueRetry(() => pushProject(pr));
+}
+async function deleteProjectRemote(id) {
+  if (!SB || !currentUser) return;
+  const { error } = await SB.from("projects").delete().eq("id", id);
+  if (error) queueRetry(() => deleteProjectRemote(id));
+}
+async function pushEntry(entry) {
+  if (!SB || !currentUser) return;
+  const { error } = await SB.from("entries").upsert(entryToRow(entry));
+  if (error) queueRetry(() => pushEntry(entry));
+}
+async function deleteEntryRemote(id) {
+  if (!SB || !currentUser) return;
+  const { error } = await SB.from("entries").delete().eq("id", id);
+  if (error) queueRetry(() => deleteEntryRemote(id));
+}
+async function pushTimerState() {
+  if (!SB || !currentUser) return;
+  const { error } = await SB.from("settings").upsert({ user_id: currentUser.id, timer_state: timer });
+  if (error) queueRetry(pushTimerState);
+}
+const pushProfileDebounced = debounce(async (p) => {
+  if (!SB || !currentUser) return;
+  const { error } = await SB.from("settings").upsert({
+    user_id: currentUser.id,
+    first_name: p.firstName || null,
+    last_name: p.lastName || null,
+    weekly_hours: p.weeklyHours,
+    vacation_days_per_year: p.vacationDaysPerYear,
+  });
+  if (error) queueRetry(() => pushProfileDebounced(p));
+}, 800);
+
+async function bulkReplaceRemote() {
+  if (!SB || !currentUser) return;
+  await SB.from("entries").delete().eq("user_id", currentUser.id);
+  await SB.from("cost_centers").delete().eq("user_id", currentUser.id);
+  await SB.from("projects").delete().eq("user_id", currentUser.id);
+  if (costCenters.length) await SB.from("cost_centers").insert(costCenters.map(costCenterToRow));
+  if (projects.length) await SB.from("projects").insert(projects.map(projectToRow));
+  if (entries.length) await SB.from("entries").insert(entries.map(entryToRow));
+}
+
+async function fetchAllFromSupabase() {
+  if (!SB || !currentUser) return;
+  const [ccRes, prRes, enRes, stRes] = await Promise.all([
+    SB.from("cost_centers").select("*").order("created_at"),
+    SB.from("projects").select("*").order("created_at"),
+    SB.from("entries").select("*").order("date"),
+    SB.from("settings").select("*").eq("user_id", currentUser.id).maybeSingle(),
+  ]);
+  if (ccRes.data) { costCenters = ccRes.data.map(rowToCostCenter); saveCostCenters(costCenters); }
+  if (prRes.data) { projects = prRes.data.map(rowToProject); saveProjects(projects); }
+  if (enRes.data) { entries = enRes.data.map(rowToEntry); saveEntries(entries); }
+  if (stRes.data) {
+    profile = {
+      firstName: stRes.data.first_name || "",
+      lastName: stRes.data.last_name || "",
+      weeklyHours: stRes.data.weekly_hours ?? null,
+      vacationDaysPerYear: stRes.data.vacation_days_per_year ?? null,
+    };
+    saveProfile(profile);
+    if (stRes.data.timer_state) { timer = stRes.data.timer_state; saveTimer(timer); }
+  }
+}
+
+function subscribeRealtime() {
+  if (!SB || !currentUser || realtimeChannel) return;
+  const filter = `user_id=eq.${currentUser.id}`;
+  realtimeChannel = SB.channel("azt-sync")
+    .on("postgres_changes", { event: "*", schema: "public", table: "entries", filter }, handleRemoteChange)
+    .on("postgres_changes", { event: "*", schema: "public", table: "cost_centers", filter }, handleRemoteChange)
+    .on("postgres_changes", { event: "*", schema: "public", table: "projects", filter }, handleRemoteChange)
+    .on("postgres_changes", { event: "*", schema: "public", table: "settings", filter }, handleRemoteChange)
+    .subscribe();
+}
+let remoteChangeDebounce = null;
+function handleRemoteChange() {
+  clearTimeout(remoteChangeDebounce);
+  remoteChangeDebounce = setTimeout(async () => {
+    await fetchAllFromSupabase();
+    renderAll();
+    renderTimer();
+  }, 600);
+}
+
+/* ---- auth flow ---- */
+async function initAuth() {
+  wireAuthEvents();
+  const { data: { session } } = await SB.auth.getSession();
+  if (session) {
+    currentUser = session.user;
+    await onLoggedIn();
+  } else {
+    document.getElementById("auth-gate").style.display = "flex";
+  }
+  SB.auth.onAuthStateChange((_event, sess) => {
+    if (_event === "SIGNED_IN" && sess) {
+      currentUser = sess.user;
+      onLoggedIn();
+    } else if (_event === "SIGNED_OUT") {
+      location.reload();
+    }
+  });
+  window.addEventListener("online", flushRetries);
+}
+
+async function onLoggedIn() {
+  document.getElementById("auth-gate").style.display = "none";
+  document.getElementById("app-shell").style.display = "";
+  document.getElementById("btn-account").style.display = "flex";
+  await fetchAllFromSupabase();
+  if (!appInitialized) { init(); appInitialized = true; }
+  else { renderAll(); renderTimer(); renderTopbarDate(); }
+  subscribeRealtime();
+}
+
+function showAuthError(msg) {
+  const el = document.getElementById("auth-error");
+  el.textContent = msg; el.style.display = "block";
+}
+function showAuthInfo(msg) {
+  const el = document.getElementById("auth-info");
+  el.textContent = msg; el.style.display = "block";
+}
+function hideAuthMessages() {
+  document.getElementById("auth-error").style.display = "none";
+  document.getElementById("auth-info").style.display = "none";
+}
+function translateAuthError(msg) {
+  if (/invalid login credentials/i.test(msg)) return "E-Mail oder Passwort ist falsch.";
+  if (/already registered|already exists|user already/i.test(msg)) return "Für diese E-Mail existiert bereits ein Konto. Bitte anmelden.";
+  if (/password.*(least|6|character)/i.test(msg)) return "Das Passwort muss mindestens 6 Zeichen haben.";
+  return msg;
+}
+
+function wireAuthEvents() {
+  document.getElementById("btn-auth-toggle").addEventListener("click", () => {
+    authMode = authMode === "login" ? "signup" : "login";
+    document.getElementById("btn-auth-submit").textContent = authMode === "login" ? "Anmelden" : "Konto erstellen";
+    document.getElementById("btn-auth-toggle").textContent = authMode === "login" ? "Noch kein Konto? Registrieren" : "Schon ein Konto? Anmelden";
+    document.getElementById("auth-sub").textContent = authMode === "login"
+      ? "Melde dich an, um deine Zeiten auf allen Geräten zu synchronisieren."
+      : "Erstelle ein Konto, um deine Zeiten auf allen Geräten zu synchronisieren.";
+    hideAuthMessages();
+  });
+
+  document.getElementById("form-auth").addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    hideAuthMessages();
+    const email = document.getElementById("auth-email").value.trim();
+    const password = document.getElementById("auth-password").value;
+    const btn = document.getElementById("btn-auth-submit");
+    btn.disabled = true;
+    try {
+      if (authMode === "login") {
+        const { error } = await SB.auth.signInWithPassword({ email, password });
+        if (error) throw error;
+      } else {
+        const { data, error } = await SB.auth.signUp({ email, password });
+        if (error) throw error;
+        if (data.user && !data.session) {
+          showAuthInfo("Konto erstellt! Bitte bestätige deine E-Mail-Adresse über den zugeschickten Link und melde dich danach an.");
+          authMode = "login";
+          document.getElementById("btn-auth-submit").textContent = "Anmelden";
+          document.getElementById("btn-auth-toggle").textContent = "Noch kein Konto? Registrieren";
+        }
+      }
+    } catch (err) {
+      showAuthError(translateAuthError(err.message || String(err)));
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  document.getElementById("btn-account").addEventListener("click", () => {
+    document.getElementById("account-email").textContent = currentUser ? currentUser.email : "–";
+    document.getElementById("account-sync-status").textContent = pendingRetries.length
+      ? "Nicht alles synchronisiert – wird bei Internetverbindung automatisch nachgeholt."
+      : "Alles synchronisiert.";
+    showBackdrop("sheet-account-backdrop");
+  });
+  document.getElementById("btn-account-close").addEventListener("click", () => hideBackdrop("sheet-account-backdrop"));
+  document.getElementById("btn-logout").addEventListener("click", async () => {
+    if (!confirm("Wirklich abmelden?")) return;
+    if (realtimeChannel) { SB.removeChannel(realtimeChannel); realtimeChannel = null; }
+    await SB.auth.signOut();
+  });
+}
 
 /* =========================================================
    Topbar date
@@ -175,6 +464,7 @@ function startWork() {
   };
   saveTimer(timer);
   renderTimer();
+  pushTimerState();
 }
 
 function pauseWork() {
@@ -187,6 +477,7 @@ function pauseWork() {
   timer.status = "paused";
   saveTimer(timer);
   renderTimer();
+  pushTimerState();
 }
 
 function resumeWork() {
@@ -199,6 +490,7 @@ function resumeWork() {
   timer.status = "running";
   saveTimer(timer);
   renderTimer();
+  pushTimerState();
 }
 
 function finishWork() {
@@ -231,6 +523,7 @@ function finishWork() {
   saveTimer(timer);
   renderTimer();
   renderTodaySummary();
+  pushTimerState();
 
   openTimesSheet("timer-finish", draft);
 }
@@ -545,11 +838,13 @@ function proceedToAllocation() {
 function deleteCurrentEntry() {
   if (!flow.editingId) return;
   if (!confirm("Diesen Eintrag wirklich löschen?")) return;
-  entries = entries.filter((e) => e.id !== flow.editingId);
+  const idToDelete = flow.editingId;
+  entries = entries.filter((e) => e.id !== idToDelete);
   saveEntries(entries);
   closeTimesSheet();
   renderAll();
   toast("Eintrag gelöscht.");
+  deleteEntryRemote(idToDelete);
 }
 
 /* =========================================================
@@ -765,6 +1060,7 @@ function saveAllocation() {
   flow = { mode: null, editingId: null, draft: null };
   renderAll();
   toast("Eintrag gespeichert.");
+  pushEntry(entry);
 }
 
 /* =========================================================
@@ -814,14 +1110,17 @@ function renderCostCenters() {
       saveProjects(projects);
       renderAll();
       toast("Kostenstelle gelöscht.");
+      deleteCostCenterRemote(id);
     });
   });
 }
 
 function addCostCenter(code, name) {
-  costCenters.push({ id: uid(), code: code.toUpperCase(), name, colorIndex: costCenters.length });
+  const cc = { id: uid(), code: code.toUpperCase(), name, colorIndex: costCenters.length };
+  costCenters.push(cc);
   saveCostCenters(costCenters);
   renderCostCenters();
+  pushCostCenter(cc);
 }
 
 /* =========================================================
@@ -867,6 +1166,7 @@ function renderProjects() {
       saveProjects(projects);
       renderProjects();
       toast("Kostenstelle aktualisiert.");
+      pushProject(pr);
     });
   });
 
@@ -883,6 +1183,7 @@ function renderProjects() {
       saveProjects(projects);
       renderAll();
       toast("Projekt gelöscht.");
+      deleteProjectRemote(id);
     });
   });
 }
@@ -910,9 +1211,11 @@ function populateProjectCostCenterSelect() {
 }
 
 function addProject(code, name, costCenterId) {
-  projects.push({ id: uid(), code: code.toUpperCase(), name, costCenterId, colorIndex: projects.length });
+  const pr = { id: uid(), code: code.toUpperCase(), name, costCenterId, colorIndex: projects.length };
+  projects.push(pr);
   saveProjects(projects);
   renderProjects();
+  pushProject(pr);
 }
 
 /* =========================================================
@@ -943,26 +1246,38 @@ function sanitizeSheetName(name, used) {
    Übersicht (year overview) sheet
    ========================================================= */
 function buildUebersichtSheet(year, monatsblaetterName, monthTotals) {
+  const weeklyHours = profile.weeklyHours || 0;
+  const dailyHours = weeklyHours / 5;
+  const vacationDays = profile.vacationDaysPerYear || 0;
+  const monthlyVacationHours = Number(((vacationDays * dailyHours) / 12).toFixed(2));
+
   const aoa = [];
   aoa.push([`Jahresübersicht ${year}`]);
   aoa.push(["", ...MONTHS_AT.map((m) => m.short), "", "Σ Arbeitszeiten /a"]);
-  aoa.push(["Stunden pro Woche", ...Array(12).fill(0), "", ""]);
+  aoa.push(["Stunden pro Woche", ...Array(12).fill(weeklyHours), "", ""]);
   aoa.push(["Soll", ...Array(12).fill(0), "", 0]);
   aoa.push(["Ist", ...Array(12).fill(0), "", 0]);
   aoa.push(["Differenz", ...Array(12).fill(""), "", 0]);
   aoa.push([]);
   aoa.push(["", ...MONTHS_AT.map((m) => m.short), "", "Σ Urlaubszeiten /a"]);
-  aoa.push(["Soll", ...Array(12).fill(0), "", 0]);
+  aoa.push(["Soll", ...Array(12).fill(monthlyVacationHours), "", 0]);
   aoa.push(["Ist", ...Array(12).fill(0), "", 0]);
   aoa.push(["Differenz", ...Array(12).fill(""), "", 0]);
 
   const ws = XLSX.utils.aoa_to_sheet(aoa);
   const O = 14; // column O (A=0 … M=12, N=13 spacer, O=14)
+  const BOLD = { font: { bold: true } };
 
   for (let m = 0; m < 12; m++) {
     const col = m + 1; // B(1) … M(12)
     ws[XLSX.utils.encode_cell({ r: 3, c: col })] = { t: "n", f: `'${monatsblaetterName}'!${monthTotals[m].sollAddr}`, z: "0.00" };
     ws[XLSX.utils.encode_cell({ r: 4, c: col })] = { t: "n", f: `'${monatsblaetterName}'!${monthTotals[m].istAddr}`, z: "0.00" };
+    // Best-effort bold on the month-name header cells (both blocks). The free SheetJS build
+    // may not persist cell styles on write — see the note in the README/export hint.
+    const headCell1 = ws[XLSX.utils.encode_cell({ r: 1, c: col })];
+    if (headCell1) headCell1.s = BOLD;
+    const headCell2 = ws[XLSX.utils.encode_cell({ r: 7, c: col })];
+    if (headCell2) headCell2.s = BOLD;
   }
   ws[XLSX.utils.encode_cell({ r: 3, c: O })] = { t: "n", f: "SUM(B4:M4)", z: "0.00" };
   ws[XLSX.utils.encode_cell({ r: 4, c: O })] = { t: "n", f: "SUM(B5:M5)", z: "0.00" };
@@ -984,7 +1299,9 @@ function buildMonatsblaetterSheet(year, overviewSheetName) {
   const aoa = [];
   const merges = [];
   const formulaPatches = [];
+  const boldCells = [];
   const monthTotals = [];
+  const fullName = [profile.firstName, profile.lastName].filter(Boolean).join(" ");
   let cursor = 0; // 0-indexed row cursor
 
   MONTHS_AT.forEach((meta, monthIndex) => {
@@ -992,12 +1309,14 @@ function buildMonatsblaetterSheet(year, overviewSheetName) {
     const monthCol = XLSX.utils.encode_col(monthIndex + 1);
     const isoPrefix = `${year}-${String(monthIndex + 1).padStart(2, "0")}`;
     const blockStart = cursor;
+    let weekdayCount = 0;
 
     aoa.push(["SOLL", 0, "", `Arbeitsbericht ${meta.full} ${year}`, "", "", ""]);
-    aoa.push(["IST", 0, "", loadEmployeeName(), "", "", ""]);
+    aoa.push(["IST", 0, "", fullName, "", "", ""]);
     aoa.push([]);
-    aoa.push(["Tag", "Datum", "Arbeitszeit", "", "Pause", "", "Stunden gearbeitet", "Tätigkeit", "Geschäftsstellen-Kürzel", "davon BESN", "Stunden Soll"]);
-    aoa.push(["", "", "Beginn", "Ende", "von", "bis", "", "", "", "", ""]);
+    aoa.push(["Tag", "Datum", "Arbeitszeit", "", "Pause", "", "Stunden gearbeitet", "Tätigkeit", "Geschäftsstellen-Kürzel"]);
+    aoa.push(["", "", "Beginn", "Ende", "von", "bis", "", "", ""]);
+    boldCells.push({ r: blockStart, c: 3 }); // "Arbeitsbericht {Monat} {Jahr}" title
 
     const dataStart = blockStart + 5;
     for (let d = 1; d <= daysCount; d++) {
@@ -1008,9 +1327,10 @@ function buildMonatsblaetterSheet(year, overviewSheetName) {
       const wd = WEEKDAY_ABBR_AT[dow];
       const dateStr = `${String(d).padStart(2, "0")}.${String(monthIndex + 1).padStart(2, "0")}.${year}`;
       const entry = entries.find((e) => e.date === iso);
+      if (!isWeekend) weekdayCount++;
 
       if (isWeekend) {
-        aoa.push([wd, dateStr, "", "", "", "", "", "", "", "", ""]);
+        aoa.push([wd, dateStr, "", "", "", "", "", "", ""]);
       } else {
         const ccCodes = entry
           ? (entry.allocations || [])
@@ -1028,22 +1348,15 @@ function buildMonatsblaetterSheet(year, overviewSheetName) {
           entry ? Number((entry.totalMinutes / 60).toFixed(2)) : 0,
           entry ? entry.activity || "" : "",
           ccCodes,
-          "",
-          0,
         ]);
       }
     }
     const dataEnd = dataStart + daysCount - 1;
 
-    formulaPatches.push({ r: blockStart, c: 1, f: `SUM(K${dataStart + 1}:K${dataEnd + 1})`, z: "0.00" });
+    // SOLL = Wochentage im Monat × (Stunden pro Woche ÷ 5) — direkt aus der Übersicht, ohne
+    // eigene Tages-Spalte (die wurde entfernt).
+    formulaPatches.push({ r: blockStart, c: 1, f: `'${overviewSheetName}'!${monthCol}3/5*${weekdayCount}`, z: "0.00" });
     formulaPatches.push({ r: blockStart + 1, c: 1, f: `SUM(G${dataStart + 1}:G${dataEnd + 1})`, z: "0.00" });
-    for (let d = 1; d <= daysCount; d++) {
-      const rowIdx = dataStart + (d - 1);
-      const dow = new Date(year, monthIndex, d).getDay();
-      if (dow !== 0 && dow !== 6) {
-        formulaPatches.push({ r: rowIdx, c: 10, f: `'${overviewSheetName}'!${monthCol}3/5`, z: "0.00" });
-      }
-    }
 
     merges.push(
       { s: { r: blockStart, c: 3 }, e: { r: blockStart, c: 6 } },
@@ -1055,8 +1368,6 @@ function buildMonatsblaetterSheet(year, overviewSheetName) {
       { s: { r: blockStart + 3, c: 6 }, e: { r: blockStart + 4, c: 6 } },
       { s: { r: blockStart + 3, c: 7 }, e: { r: blockStart + 4, c: 7 } },
       { s: { r: blockStart + 3, c: 8 }, e: { r: blockStart + 4, c: 8 } },
-      { s: { r: blockStart + 3, c: 9 }, e: { r: blockStart + 4, c: 9 } },
-      { s: { r: blockStart + 3, c: 10 }, e: { r: blockStart + 4, c: 10 } },
     );
 
     monthTotals.push({
@@ -1072,10 +1383,14 @@ function buildMonatsblaetterSheet(year, overviewSheetName) {
   formulaPatches.forEach((p) => {
     ws[XLSX.utils.encode_cell({ r: p.r, c: p.c })] = { t: "n", f: p.f, z: p.z };
   });
+  boldCells.forEach(({ r, c }) => {
+    const addr = XLSX.utils.encode_cell({ r, c });
+    if (ws[addr]) ws[addr].s = { font: { bold: true } };
+  });
   ws["!merges"] = merges;
   ws["!cols"] = [
     { wch: 6 }, { wch: 12 }, { wch: 9 }, { wch: 9 }, { wch: 8 }, { wch: 8 },
-    { wch: 13 }, { wch: 26 }, { wch: 14 }, { wch: 10 }, { wch: 11 },
+    { wch: 13 }, { wch: 26 }, { wch: 14 },
   ];
   return { ws, monthTotals };
 }
@@ -1119,7 +1434,7 @@ function buildBlockSheet(titleLabel, relevantEntries, generalHoursFn, projectHou
   const aoa = [];
 
   const row1 = [titleLabel];
-  const employeeName = loadEmployeeName();
+  const employeeName = [profile.firstName, profile.lastName].filter(Boolean).join(" ");
   if (employeeName) {
     const lastBlockCol = (blockDefs.length - 1) * 5; // 4 data cols + 1 spacer per block
     row1[lastBlockCol] = employeeName;
@@ -1245,7 +1560,7 @@ function exportExcel() {
   XLSX.utils.book_append_sheet(wb, wsLabor, sanitizeSheetName("Labor", usedNames));
 
   const filename = `Arbeitszeit_Export_${todayStr()}.xlsx`;
-  XLSX.writeFile(wb, filename);
+  XLSX.writeFile(wb, filename, { cellStyles: true });
   toast("Excel-Datei wurde erstellt.");
 }
 
@@ -1278,6 +1593,7 @@ function importJSON(file) {
       saveProjects(projects);
       renderAll();
       toast("Backup importiert.");
+      bulkReplaceRemote();
     } catch {
       toast("Diese Datei konnte nicht gelesen werden.");
     }
@@ -1292,6 +1608,7 @@ function resetAll() {
   saveEntries(entries); saveCostCenters(costCenters); saveProjects(projects); saveTimer(timer);
   renderAll();
   toast("Alle Daten wurden gelöscht.");
+  bulkReplaceRemote();
 }
 
 /* =========================================================
@@ -1383,9 +1700,33 @@ function wireEvents() {
   });
 
   document.getElementById("btn-export").addEventListener("click", exportExcel);
-  const employeeNameInput = document.getElementById("employee-name");
-  employeeNameInput.value = loadEmployeeName();
-  employeeNameInput.addEventListener("input", () => saveEmployeeName(employeeNameInput.value));
+
+  document.getElementById("btn-open-profile").addEventListener("click", () => {
+    document.getElementById("profile-firstname").value = profile.firstName || "";
+    document.getElementById("profile-lastname").value = profile.lastName || "";
+    document.getElementById("profile-weekly-hours").value = profile.weeklyHours ?? "";
+    document.getElementById("profile-vacation-days").value = profile.vacationDaysPerYear ?? "";
+    showBackdrop("sheet-profile-backdrop");
+  });
+  document.getElementById("btn-profile-cancel").addEventListener("click", () => hideBackdrop("sheet-profile-backdrop"));
+  document.getElementById("sheet-profile-backdrop").addEventListener("click", (ev) => {
+    if (ev.target.id === "sheet-profile-backdrop") hideBackdrop("sheet-profile-backdrop");
+  });
+  document.getElementById("btn-profile-save").addEventListener("click", () => {
+    const weeklyHoursRaw = document.getElementById("profile-weekly-hours").value;
+    const vacationDaysRaw = document.getElementById("profile-vacation-days").value;
+    profile = {
+      firstName: document.getElementById("profile-firstname").value.trim(),
+      lastName: document.getElementById("profile-lastname").value.trim(),
+      weeklyHours: weeklyHoursRaw === "" ? null : Number(weeklyHoursRaw),
+      vacationDaysPerYear: vacationDaysRaw === "" ? null : Number(vacationDaysRaw),
+    };
+    saveProfile(profile);
+    pushProfileDebounced(profile);
+    hideBackdrop("sheet-profile-backdrop");
+    toast("Profildaten gespeichert.");
+  });
+
   document.getElementById("btn-export-json").addEventListener("click", exportJSON);
   document.getElementById("btn-import-json").addEventListener("click", () =>
     document.getElementById("import-file-input").click());
@@ -1402,6 +1743,9 @@ function wireEvents() {
   });
   document.getElementById("sheet-alloc-backdrop").addEventListener("click", (ev) => {
     if (ev.target.id === "sheet-alloc-backdrop") closeAllocSheet();
+  });
+  document.getElementById("sheet-account-backdrop").addEventListener("click", (ev) => {
+    if (ev.target.id === "sheet-account-backdrop") hideBackdrop("sheet-account-backdrop");
   });
 }
 
@@ -1421,4 +1765,11 @@ function init() {
   }
 }
 
-document.addEventListener("DOMContentLoaded", init);
+document.addEventListener("DOMContentLoaded", () => {
+  if (SB) {
+    initAuth();
+  } else {
+    document.getElementById("app-shell").style.display = "";
+    init();
+  }
+});

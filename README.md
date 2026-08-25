@@ -45,11 +45,56 @@ hinzufügen".
 In Chrome oder Edge erscheint in der Adressleiste ein Installieren-Symbol – damit läuft
 die App auch am Rechner als eigenständiges Fenster.
 
+## Mehrere Geräte & Kolleg:innen (optional, mit Supabase)
+
+Standardmäßig läuft die App **rein lokal** (siehe unten) – jedes Gerät hat seine eigenen
+Daten, nichts synchronisiert automatisch. Wenn du **eigenes Konto = automatisch auf allen
+deinen Geräten synchron**, aber **Kolleg:innen sehen sich gegenseitig nicht**, willst,
+richte Supabase ein (kostenloser Tarif reicht für diesen Zweck locker):
+
+1. Supabase-Projekt anlegen (falls noch nicht geschehen) auf https://supabase.com.
+2. Im Supabase-Dashboard: **SQL Editor** öffnen, den Inhalt von `supabase-schema.sql`
+   (liegt in diesem Ordner) einfügen und ausführen. Das legt die Tabellen, die
+   Row-Level-Security-Regeln (jede:r sieht nur die eigenen Daten) und Realtime an.
+
+   *Falls du das Schema schon früher einmal ausgeführt hast:* Bitte trotzdem erneut
+   ausführen – die Datei wurde um die Profil-Spalten (Vorname, Nachname, Wochenstunden,
+   Urlaubstage) erweitert. Das Skript ist so geschrieben, dass es gefahrlos beliebig oft
+   ausgeführt werden kann: Es löscht keine Daten und überspringt alles bereits Vorhandene.
+3. Unter **Project Settings → API** die **Project URL** und den **anon public**-Key
+   kopieren.
+4. Diese beiden Werte in `config.js` eintragen (`SUPABASE_URL`, `SUPABASE_ANON_KEY`) –
+   Anleitung steht direkt als Kommentar in der Datei.
+5. Alle Dateien (inkl. der ausgefüllten `config.js`) hochladen/hosten wie gewohnt.
+
+Danach zeigt die App beim ersten Öffnen einen Anmelde-Bildschirm (E-Mail + Passwort).
+Jede Person – du und deine Kolleg:innen – registriert sich einmal mit der eigenen
+E-Mail-Adresse. Meldet sich dieselbe Person auf einem zweiten Gerät mit demselben Konto
+an, werden Einträge, Kostenstellen und Projekte automatisch abgeglichen (auch der
+laufende Timer). Verschiedene Konten sehen sich dabei nie gegenseitig – das übernimmt die
+Datenbank selbst (Row Level Security), unabhängig davon, wie die App programmiert ist.
+
+**Angemeldet bleiben:** Nach dem ersten Login auf einem Gerät bleibt die Anmeldung dauerhaft
+bestehen – die App fragt nicht bei jedem Öffnen erneut nach dem Passwort. Die Sitzung wird
+im Hintergrund automatisch verlängert.
+
+**Abmelden:** Oben rechts in der App auf das 👤-Symbol tippen → dort stehen die angemeldete
+E-Mail-Adresse, der Sync-Status und der Button **„Abmelden"**. Sinnvoll z. B. an einem
+gemeinsam genutzten Rechner oder wenn ein:e Kolleg:in kurz das eigene Konto verwenden will.
+
+*Hinweis:* Standardmäßig verlangt Supabase eine Bestätigung der E-Mail-Adresse nach der
+Registrierung (Link in einer automatisch verschickten Mail). Falls das für euren
+internen Gebrauch unnötig ist, kannst du das unter **Authentication → Providers → Email**
+in Supabase abschalten ("Confirm email" deaktivieren).
+
+Lässt du `config.js` leer, läuft die App exakt wie zuvor rein lokal – der Login-Bildschirm
+erscheint dann gar nicht erst.
+
 ## Wichtiger Hinweis zu den Daten
 
-Alle Einträge und Kostenstellen werden **lokal im Browser des jeweiligen Geräts**
-gespeichert (nicht in einer Cloud, nicht synchronisiert zwischen Handy und Rechner). Das
-heißt:
+**Ohne Supabase-Einrichtung** (siehe oben) werden alle Einträge und Kostenstellen **lokal
+im Browser des jeweiligen Geräts** gespeichert (nicht in einer Cloud, nicht
+synchronisiert zwischen Handy und Rechner). Das heißt:
 
 - Lösche nicht die Browserdaten/den Cache dieser Seite, sonst gehen Einträge verloren.
 - Wenn du auf mehreren Geräten arbeitest, nutze im Tab **Export** den Button
@@ -72,7 +117,12 @@ heißt:
    auswählen). Bei der Zeit-Aufteilung eines Eintrags erscheinen die Projekte einer
    Kostenstelle automatisch erst, sobald du bei dieser Kostenstelle Zeit eingetragen hast.
    Die Zeit-Eingabe erfolgt überall als Uhrzeit-Feld im Format Std:Min (z. B. 01:30).
-5. **Export:** Erstellt die Excel-Datei mit folgenden Arbeitsblättern, in dieser Reihenfolge:
+5. **Profildaten:** Im Export-Tab über „👤 Profildaten bearbeiten" – Vor-/Nachname (erscheint
+   im Kopf jedes Monatsblatts sowie jeder Kostenstellen-Tabelle), Arbeitsstunden pro Woche
+   und Urlaubstage pro Jahr. Letztere zwei befüllen automatisch die „Stunden pro Woche"- und
+   „Urlaub Soll"-Zeilen der Übersicht (weiterhin manuell überschreibbar in Excel, z. B. wenn
+   sich die Stunden während des Jahres ändern).
+6. **Export:** Erstellt die Excel-Datei mit folgenden Arbeitsblättern, in dieser Reihenfolge:
    - **Übersicht** – Jahresüberblick mit Soll/Ist-Arbeitszeit und Soll/Ist-Urlaub pro Monat plus
      Jahressummen und Differenz. Trage hier einmal pro Monat die „Stunden pro Woche" ein – der
      Tages-Soll-Wert in den Monatsblättern und die Soll-Summe hier berechnen sich automatisch
@@ -80,9 +130,9 @@ heißt:
    - **Monatsblätter** – ein einziges Arbeitsblatt mit zwölf hintereinander gestapelten
      Tabellen (Jänner bis Dezember), jede im klassischen Arbeitsbericht-Format: pro
      Kalendertag eine Zeile mit Wochentag, Datum, Beginn/Ende, Pause von/bis, gearbeiteten
-     Stunden, Tätigkeit, Geschäftsstellen-Kürzel (alle aus deinen Einträgen übernommen), einem
-     freien Feld „davon BESN" und dem automatisch berechneten Tages-Soll. Wochenenden bleiben
-     leer.
+     Stunden, Tätigkeit und Geschäftsstellen-Kürzel (alle aus deinen Einträgen übernommen).
+     Wochenenden bleiben leer. Das Tages-Soll wird nicht mehr als eigene Spalte geführt,
+     sondern intern direkt aus der Anzahl Werktage im Monat × „Stunden pro Woche" berechnet.
    - **Gesamt** – wie bisher: alle Tage flach aufgelistet mit einer Spalte je Kostenstelle und
      je Projekt.
    - **Ein Arbeitsblatt pro Kostenstelle** – die zugehörigen Projekte erscheinen darin als
@@ -95,17 +145,21 @@ heißt:
    Optional kannst du im Export-Tab einmalig deinen Namen eintragen – er erscheint dann im Kopf
    jedes Monatsblatts.
 
-   **Hinweis:** Die kostenlose Excel-Bibliothek kann keine Zellfarben/Formatierungen (z. B.
-   rosa Wochenend-Zeilen) schreiben – Struktur, Formeln und Zahlen stimmen, Farben müsstest du
-   bei Bedarf in Excel selbst per bedingter Formatierung ergänzen.
+   **Hinweis:** Die kostenlose Excel-Bibliothek kann Zellformatierungen wie Fett oder Farben
+   nur eingeschränkt schreiben (das ist bei der freien SheetJS-Version so vorgesehen, volle
+   Formatierung ist ein Pro-Feature). Die App versucht die Monatsnamen fett zu formatieren –
+   ob das im geöffneten Excel tatsächlich ankommt, hängt von Excel-Version/Bibliotheksversion
+   ab. Falls nicht: Zeile markieren und einmal Strg+B drücken, dauert wenige Sekunden.
 
 ## Dateien in diesem Ordner
 
 ```
-index.html      – App-Gerüst
-styles.css      – Design
-app.js          – gesamte Logik (Timer, Speicherung, Excel-Export)
-manifest.json   – PWA-Manifest (Name, Icons, Startverhalten)
-sw.js           – Service Worker (Offline-Funktion)
-icons/          – App-Icons
+index.html            – App-Gerüst (inkl. Login-Bildschirm)
+styles.css             – Design
+app.js                 – gesamte Logik (Timer, Speicherung, Sync, Excel-Export)
+config.js              – hier deine Supabase-Zugangsdaten eintragen (optional)
+supabase-schema.sql    – einmalig in Supabase ausführen (optional, für Sync)
+manifest.json          – PWA-Manifest (Name, Icons, Startverhalten)
+sw.js                  – Service Worker (Offline-Funktion)
+icons/                 – App-Icons
 ```

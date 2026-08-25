@@ -1,17 +1,19 @@
 // Bump this version string whenever index.html/app.js/styles.css change,
 // otherwise devices that already installed the app keep serving old cached files.
-const CACHE_NAME = "arbeitszeit-tracker-v6";
+const CACHE_NAME = "arbeitszeit-tracker-v8";
 const PRECACHE_URLS = [
   "./",
   "./index.html",
   "./styles.css",
   "./app.js",
+  "./config.js",
   "./manifest.json",
   "./icons/icon-192.png",
   "./icons/icon-512.png",
   "./icons/icon-maskable-512.png",
   "./icons/apple-touch-icon.png",
-  "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"
+  "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js",
+  "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"
 ];
 
 self.addEventListener("install", (event) => {

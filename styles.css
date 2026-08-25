@@ -270,6 +270,34 @@ button, input, select, textarea { font-family: inherit; }
 }
 .project-cc-select.missing { border-color: var(--rust); color: var(--rust); }
 
+/* ---------- Auth gate ---------- */
+.auth-gate {
+  position: fixed; inset: 0; z-index: 100;
+  background: var(--ink);
+  display: flex; align-items: center; justify-content: center;
+  padding: 24px;
+}
+.auth-card {
+  width: 100%; max-width: 380px;
+  background: var(--surface);
+  border-radius: 20px;
+  padding: 32px 26px 26px;
+  box-shadow: var(--shadow);
+  text-align: center;
+}
+.auth-logo { font-size: 34px; margin-bottom: 6px; }
+.auth-title { font-size: 20px; font-weight: 700; margin: 0 0 6px; }
+.auth-sub { font-size: 13.5px; color: var(--text-soft); margin: 0 0 22px; line-height: 1.5; }
+.auth-card .field { text-align: left; }
+
+/* ---------- Topbar account button ---------- */
+.topbar-account {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 50%;
+  width: 34px; height: 34px; font-size: 15px; cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+}
+.topbar-account:active { background: #fafafa; }
+
 /* Allocation rows inside the split panel */
 .alloc-group-label {
   font-size: 12px; font-weight: 700; color: var(--text-soft);
