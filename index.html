@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1" />
+<title>Arbeitszeit Tracker</title>
+<meta name="theme-color" content="#1B1F27" />
+<meta name="description" content="Arbeitszeit erfassen, auf Kostenstellen aufteilen und als Excel exportieren." />
+
+<link rel="manifest" href="manifest.json" />
+<link rel="icon" href="icons/favicon.png" />
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="Arbeitszeit" />
+
+<link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+
+<div class="app-shell">
+
+  <div class="topbar">
+    <h1>Arbeitszeit</h1>
+    <div class="date" id="topbar-date">–</div>
+  </div>
+
+  <!-- ============ TIMER VIEW ============ -->
+  <section class="view active" id="view-timer">
+
+    <div class="timer-card">
+      <div class="timer-status" id="timer-status">
+        <span class="dot"></span><span id="timer-status-text">Bereit</span>
+      </div>
+      <div class="timer-display" id="timer-display">00:00:00</div>
+      <div class="timer-sub" id="timer-sub">Noch kein Arbeitsbeginn heute.</div>
+
+      <button class="btn btn-start" id="btn-start">Arbeit starten</button>
+
+      <div class="timer-actions" id="timer-running-actions" style="display:none;">
+        <button class="btn btn-pause" id="btn-pause">⏸ Pause</button>
+        <button class="btn btn-end" id="btn-end">Feierabend</button>
+      </div>
+
+      <div class="timer-actions" id="timer-paused-actions" style="display:none;">
+        <button class="btn btn-resume" id="btn-resume">▶ Weiterarbeiten</button>
+        <button class="btn btn-end" id="btn-end-2">Feierabend</button>
+      </div>
+    </div>
+
+    <div class="section-label">Heute</div>
+    <div id="today-summary"></div>
+
+  </section>
+
+  <!-- ============ EINTRÄGE VIEW ============ -->
+  <section class="view" id="view-entries">
+    <div class="section-label mb-0">Alle Einträge</div>
+    <div class="fab-row">
+      <button class="btn btn-primary" id="btn-add-manual">+ Eintrag manuell erfassen</button>
+    </div>
+    <div class="spacer-24"></div>
+    <div id="entries-list"></div>
+  </section>
+
+  <!-- ============ KOSTENSTELLEN VIEW ============ -->
+  <section class="view" id="view-costcenters">
+    <div class="section-label mb-0">Kostenstellen &amp; Kunden</div>
+    <p class="hint" style="margin:6px 2px 16px;">
+      Lege hier alle Kunden bzw. Rechnungsstellen an, auf die du Arbeitszeit verteilen möchtest.
+      Das Kürzel erscheint als eigene Spalte bzw. eigenes Arbeitsblatt im Excel-Export.
+    </p>
+
+    <form id="form-costcenter">
+      <div class="field-row">
+        <div class="field" style="flex:0 0 90px;">
+          <label for="cc-code">Kürzel</label>
+          <input type="text" id="cc-code" maxlength="10" placeholder="z. B. ACM" required />
+        </div>
+        <div class="field" style="flex:1;">
+          <label for="cc-name">Name</label>
+          <input type="text" id="cc-name" placeholder="z. B. Acme GmbH" required />
+        </div>
+      </div>
+      <button type="submit" class="btn btn-secondary btn-block">+ Kostenstelle hinzufügen</button>
+    </form>
+
+    <div class="spacer-24"></div>
+    <div id="costcenter-list"></div>
+  </section>
+
+  <!-- ============ EXPORT VIEW ============ -->
+  <section class="view" id="view-export">
+    <div class="section-label mb-0">Export</div>
+
+    <div class="stat-grid" id="export-stats"></div>
+
+    <button class="btn btn-primary btn-block" id="btn-export" style="margin-top:18px;">
+      ⬇ Excel-Datei erstellen
+    </button>
+
+    <div class="export-note">
+      Der Export enthält ein Arbeitsblatt <b>„Gesamt“</b> mit allen Tagen, je ein Arbeitsblatt pro
+      Kostenstelle/Kunde sowie ein separates Arbeitsblatt <b>„Labor“</b> für die unabhängig erfasste
+      Laborzeit. Alle Zeiten in Stunden als Dezimalzahl (z. B. 7,50).
+    </div>
+
+    <div class="section-label">Daten</div>
+    <button class="btn btn-ghost btn-block" id="btn-export-json">Backup exportieren (.json)</button>
+    <div style="height:10px;"></div>
+    <button class="btn btn-ghost btn-block" id="btn-import-json">Backup importieren (.json)</button>
+    <input type="file" id="import-file-input" accept="application/json" style="display:none;" />
+    <div style="height:10px;"></div>
+    <button class="btn btn-danger-ghost btn-block" id="btn-reset-all">Alle Daten löschen</button>
+  </section>
+
+</div>
+
+<!-- ============ BOTTOM TAB BAR ============ -->
+<nav class="tabbar">
+  <div class="tabbar-inner">
+    <button class="tab-btn active" data-view="view-timer">
+      <span class="ic">⏱</span><span class="lb">Timer</span>
+    </button>
+    <button class="tab-btn" data-view="view-entries">
+      <span class="ic">📋</span><span class="lb">Einträge</span>
+    </button>
+    <button class="tab-btn" data-view="view-costcenters">
+      <span class="ic">🏷</span><span class="lb">Kostenstellen</span>
+    </button>
+    <button class="tab-btn" data-view="view-export">
+      <span class="ic">⬇</span><span class="lb">Export</span>
+    </button>
+  </div>
+</nav>
+
+<!-- ============ SHEET: Zeiten (manuell / bearbeiten) ============ -->
+<div class="sheet-backdrop" id="sheet-times-backdrop">
+  <div class="sheet">
+    <div class="sheet-handle"></div>
+    <div class="sheet-title" id="sheet-times-title">Eintrag erfassen</div>
+    <div class="sheet-sub">Trage Datum, Arbeits- und Pausenzeiten ein.</div>
+
+    <form id="form-times">
+      <div class="field">
+        <label for="f-date">Datum</label>
+        <input type="date" id="f-date" required />
+      </div>
+      <div class="field-row">
+        <div class="field">
+          <label for="f-start">Beginn der Arbeit</label>
+          <input type="time" id="f-start" required />
+        </div>
+        <div class="field">
+          <label for="f-end">Ende der Arbeit (Feierabend)</label>
+          <input type="time" id="f-end" required />
+        </div>
+      </div>
+      <div class="field-row">
+        <div class="field">
+          <label for="f-pause-start">Pause Start</label>
+          <input type="time" id="f-pause-start" />
+        </div>
+        <div class="field">
+          <label for="f-pause-end">Pause Ende</label>
+          <input type="time" id="f-pause-end" />
+        </div>
+      </div>
+      <div class="field">
+        <label for="f-activity">Tätigkeit</label>
+        <input type="text" id="f-activity" placeholder="z. B. Konzepterstellung, Support …" />
+      </div>
+      <div class="hint" id="times-total-hint">Gesamtarbeitszeit: –</div>
+
+      <div class="sheet-actions">
+        <button type="button" class="btn btn-secondary" id="btn-times-cancel">Abbrechen</button>
+        <button type="submit" class="btn btn-primary" id="btn-times-next">Weiter zur Aufteilung</button>
+      </div>
+      <div id="times-delete-row" style="display:none; margin-top:10px;">
+        <button type="button" class="btn btn-danger-ghost btn-block" id="btn-times-delete">Eintrag löschen</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- ============ SHEET: Aufteilung (Kostenstellen + Labor) ============ -->
+<div class="sheet-backdrop" id="sheet-alloc-backdrop">
+  <div class="sheet">
+    <div class="sheet-handle"></div>
+    <div class="sheet-title">Zeit aufteilen</div>
+    <div class="sheet-sub" id="alloc-sub">Gesamtarbeitszeit: –</div>
+
+    <div class="section-label" style="margin-top:0;">Kostenstellen / Kunden</div>
+    <div id="alloc-costcenter-rows"></div>
+    <div class="hint" id="alloc-remaining-hint"></div>
+    <p class="hint" id="alloc-no-cc" style="display:none;">
+      Noch keine Kostenstellen angelegt. Du kannst das im Tab „Kostenstellen“ nachholen und die
+      Aufteilung später ergänzen.
+    </p>
+
+    <div class="section-label">Laborzeit (unabhängig von Kostenstelle)</div>
+    <div class="alloc-row">
+      <span class="alloc-swatch" style="background:var(--teal);"></span>
+      <span class="alloc-name">Labor-Anteil</span>
+      <div class="alloc-input"><input type="number" id="alloc-labor-minutes" min="0" step="5" placeholder="0" /></div>
+      <span class="alloc-unit">Min</span>
+    </div>
+    <p class="hint">Wird zusätzlich, unabhängig von der Kostenstellen-Zuordnung, im Arbeitsblatt „Labor“ erfasst.</p>
+
+    <div class="sheet-actions">
+      <button type="button" class="btn btn-secondary" id="btn-alloc-back">Zurück</button>
+      <button type="button" class="btn btn-primary" id="btn-alloc-save">Speichern</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
