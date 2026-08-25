@@ -93,9 +93,8 @@
   <section class="view" id="view-projects">
     <div class="section-label mb-0">Projekte</div>
     <p class="hint" style="margin:6px 2px 16px;">
-      Lege hier Projekte an, auf die du Arbeitszeit verteilen möchtest – unabhängig von den
-      Kostenstellen. Jedes Projekt erscheint als eigene Spalte bzw. eigenes Arbeitsblatt im
-      Excel-Export.
+      Lege hier Projekte an – jedes Projekt gehört zu genau einer Kostenstelle und erscheint als
+      Unterpunkt in deren Arbeitsblatt im Excel-Export.
     </p>
 
     <form id="form-project">
@@ -109,8 +108,15 @@
           <input type="text" id="pr-name" placeholder="z. B. Website Relaunch" required />
         </div>
       </div>
+      <div class="field">
+        <label for="pr-costcenter">Kostenstelle</label>
+        <select id="pr-costcenter" required></select>
+      </div>
       <button type="submit" class="btn btn-secondary btn-block">+ Projekt hinzufügen</button>
     </form>
+    <p class="hint warn" id="project-no-cc-hint" style="display:none;">
+      Lege zuerst mindestens eine Kostenstelle an, bevor du Projekte anlegen kannst.
+    </p>
 
     <div class="spacer-24"></div>
     <div id="project-list"></div>
@@ -236,20 +242,19 @@
       Aufteilung später ergänzen.
     </p>
 
-    <div class="section-label">Projekte (unabhängig von Kostenstelle)</div>
+    <div class="section-label">Projekte</div>
     <div id="alloc-project-rows"></div>
-    <div class="hint" id="alloc-project-remaining-hint"></div>
     <p class="hint" id="alloc-no-project" style="display:none;">
-      Noch keine Projekte angelegt. Du kannst das im Tab „Projekte“ nachholen und die Aufteilung
-      später ergänzen.
+      Trage zuerst oben bei einer Kostenstelle Zeit ein – die zugehörigen Projekte erscheinen
+      dann automatisch hier.
     </p>
 
     <div class="section-label">Laborzeit (unabhängig von Kostenstelle &amp; Projekt)</div>
     <div class="alloc-row">
       <span class="alloc-swatch" style="background:var(--teal);"></span>
       <span class="alloc-name">Labor-Anteil</span>
-      <div class="alloc-input"><input type="number" id="alloc-labor-minutes" min="0" step="5" placeholder="0" /></div>
-      <span class="alloc-unit">Min</span>
+      <div class="alloc-input"><input type="time" id="alloc-labor-minutes" /></div>
+      <span class="alloc-unit"></span>
     </div>
     <p class="hint">Wird zusätzlich, unabhängig von der Kostenstellen-Zuordnung, im Arbeitsblatt „Labor“ erfasst.</p>
 

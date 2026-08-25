@@ -68,10 +68,10 @@ heißt:
    nachtragen sowie bestehende Einträge antippen, bearbeiten oder löschen.
 3. **Kostenstellen:** Kunden/Rechnungsstellen mit Kürzel (z. B. "ACM") und Name anlegen.
    Diese stehen danach bei jedem Eintrag zur Aufteilung zur Verfügung.
-4. **Projekte:** Funktioniert genauso wie Kostenstellen, ist aber eine komplett
-   unabhängige zweite Kategorie – z. B. wenn du Zeit zusätzlich nach Projekt statt nur
-   nach Kunde auswerten willst. Ein Eintrag kann gleichzeitig einer Kostenstelle UND
-   einem Projekt zugeordnet sein.
+4. **Projekte:** Jedes Projekt gehört jetzt zu genau einer Kostenstelle (bei der Anlage
+   auswählen). Bei der Zeit-Aufteilung eines Eintrags erscheinen die Projekte einer
+   Kostenstelle automatisch erst, sobald du bei dieser Kostenstelle Zeit eingetragen hast.
+   Die Zeit-Eingabe erfolgt überall als Uhrzeit-Feld im Format Std:Min (z. B. 01:30).
 5. **Export:** Erstellt die Excel-Datei mit folgenden Arbeitsblättern, in dieser Reihenfolge:
    - **Übersicht** – Jahresüberblick mit Soll/Ist-Arbeitszeit und Soll/Ist-Urlaub pro Monat plus
      Jahressummen und Differenz. Trage hier einmal pro Monat die „Stunden pro Woche" ein – der

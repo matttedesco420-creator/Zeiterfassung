@@ -49,6 +49,20 @@ function fmtDatePlain(dateStr) {
   const [y, m, d] = dateStr.split("-");
   return `${d}.${m}.${y}`;
 }
+function parseHHMM(value) {
+  if (!value) return 0;
+  const parts = value.split(":");
+  if (parts.length !== 2) return 0;
+  const h = Number(parts[0]), m = Number(parts[1]);
+  if (Number.isNaN(h) || Number.isNaN(m)) return 0;
+  return h * 60 + m;
+}
+function minutesToHHMM(minutes) {
+  if (!minutes || minutes <= 0) return "";
+  const h = Math.floor(minutes / 60);
+  const m = Math.round(minutes % 60);
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+}
 function computeTotalMinutes(start, end, pauseStart, pauseEnd) {
   const s = timeToMin(start), e = timeToMin(end);
   if (s === null || e === null) return 0;
@@ -561,45 +575,22 @@ function openAllocSheet() {
           <span class="alloc-swatch" style="background:${color};"></span>
           <span class="alloc-name">${escapeHtml(cc.code)} — ${escapeHtml(cc.name)}</span>
           <div class="alloc-input">
-            <input type="number" min="0" step="5" placeholder="0"
-              data-cc-id="${cc.id}" value="${existing ? existing.minutes : ""}" />
+            <input type="time" data-cc-id="${cc.id}" value="${existing ? minutesToHHMM(existing.minutes) : ""}" />
           </div>
-          <span class="alloc-unit">Min</span>
+          <span class="alloc-unit"></span>
         </div>`;
     }).join("");
-    rowsEl.querySelectorAll("input").forEach((inp) => inp.addEventListener("input", updateAllocRemainingHint));
+    rowsEl.querySelectorAll("input").forEach((inp) => inp.addEventListener("input", () => {
+      updateAllocRemainingHint();
+      renderAllocProjectRows();
+    }));
   }
 
-  const projectRowsEl = document.getElementById("alloc-project-rows");
-  const noProjectHint = document.getElementById("alloc-no-project");
-
-  if (projects.length === 0) {
-    projectRowsEl.innerHTML = "";
-    noProjectHint.style.display = "block";
-  } else {
-    noProjectHint.style.display = "none";
-    projectRowsEl.innerHTML = projects.map((pr) => {
-      const existing = (flow.draft.projectAllocations || []).find((a) => a.projectId === pr.id);
-      const color = PROJECT_PALETTE[pr.colorIndex % PROJECT_PALETTE.length];
-      return `
-        <div class="alloc-row">
-          <span class="alloc-swatch" style="background:${color};"></span>
-          <span class="alloc-name">${escapeHtml(pr.code)} — ${escapeHtml(pr.name)}</span>
-          <div class="alloc-input">
-            <input type="number" min="0" step="5" placeholder="0"
-              data-project-id="${pr.id}" value="${existing ? existing.minutes : ""}" />
-          </div>
-          <span class="alloc-unit">Min</span>
-        </div>`;
-    }).join("");
-    projectRowsEl.querySelectorAll("input").forEach((inp) => inp.addEventListener("input", updateProjectAllocRemainingHint));
-  }
-
-  document.getElementById("alloc-labor-minutes").value = flow.draft.laborMinutes || "";
+  document.getElementById("alloc-labor-minutes").value = minutesToHHMM(flow.draft.laborMinutes);
   document.getElementById("alloc-labor-minutes").oninput = updateAllocRemainingHint;
 
   updateAllocRemainingHint();
-  updateProjectAllocRemainingHint();
+  renderAllocProjectRows();
   showBackdrop("sheet-alloc-backdrop");
 }
 
@@ -608,7 +599,7 @@ function closeAllocSheet() { hideBackdrop("sheet-alloc-backdrop"); }
 function readAllocRows() {
   const rows = [];
   document.querySelectorAll("#alloc-costcenter-rows input[data-cc-id]").forEach((inp) => {
-    const minutes = parseFloat(inp.value);
+    const minutes = parseHHMM(inp.value);
     if (minutes > 0) rows.push({ costCenterId: inp.dataset.ccId, minutes });
   });
   return rows;
@@ -617,7 +608,7 @@ function readAllocRows() {
 function readProjectAllocRows() {
   const rows = [];
   document.querySelectorAll("#alloc-project-rows input[data-project-id]").forEach((inp) => {
-    const minutes = parseFloat(inp.value);
+    const minutes = parseHHMM(inp.value);
     if (minutes > 0) rows.push({ projectId: inp.dataset.projectId, minutes });
   });
   return rows;
@@ -643,30 +634,111 @@ function updateAllocRemainingHint() {
   }
 }
 
-function updateProjectAllocRemainingHint() {
-  const total = flow.draft.totalMinutes || 0;
-  const allocated = readProjectAllocRows().reduce((s, a) => s + a.minutes, 0);
-  const remaining = total - allocated;
-  const hint = document.getElementById("alloc-project-remaining-hint");
-  if (allocated === 0) {
-    hint.textContent = `Noch nichts zugeteilt (Gesamt: ${fmtHoursDecimal(total)} h).`;
-    hint.className = "hint";
-  } else if (remaining > 0.4) {
-    hint.textContent = `Noch nicht zugeteilt: ${fmtHoursDecimal(remaining)} h`;
-    hint.className = "hint warn";
-  } else if (remaining < -0.4) {
-    hint.textContent = `Zuteilung übersteigt Gesamtzeit um ${fmtHoursDecimal(-remaining)} h`;
-    hint.className = "hint warn";
-  } else {
-    hint.textContent = "✓ Vollständig zugeteilt";
-    hint.className = "hint ok";
+/* Projekte erscheinen erst, sobald ihre übergeordnete Kostenstelle Zeit hat
+   (oder wenn sie bereits aus einer früheren Speicherung Zeit zugewiesen bekommen haben,
+   damit beim Bearbeiten nichts unsichtbar verloren geht). */
+function renderAllocProjectRows() {
+  const container = document.getElementById("alloc-project-rows");
+  const noProjectHint = document.getElementById("alloc-no-project");
+
+  const typedValues = {};
+  container.querySelectorAll("input[data-project-id]").forEach((inp) => {
+    typedValues[inp.dataset.projectId] = inp.value;
+  });
+
+  const ccMinutes = {};
+  document.querySelectorAll("#alloc-costcenter-rows input[data-cc-id]").forEach((inp) => {
+    ccMinutes[inp.dataset.ccId] = parseHHMM(inp.value);
+  });
+
+  const savedProjectCcIds = new Set(
+    (flow.draft.projectAllocations || [])
+      .map((a) => projects.find((p) => p.id === a.projectId))
+      .filter(Boolean)
+      .map((p) => p.costCenterId)
+  );
+  const activeCcIds = costCenters
+    .filter((cc) => (ccMinutes[cc.id] || 0) > 0 || savedProjectCcIds.has(cc.id))
+    .map((cc) => cc.id);
+
+  if (activeCcIds.length === 0) {
+    container.innerHTML = "";
+    noProjectHint.textContent = "Trage zuerst oben bei einer Kostenstelle Zeit ein – die zugehörigen Projekte erscheinen dann automatisch hier.";
+    noProjectHint.style.display = "block";
+    return;
   }
+
+  const groups = activeCcIds
+    .map((ccId) => ({ cc: costCenters.find((c) => c.id === ccId), list: projects.filter((p) => p.costCenterId === ccId) }))
+    .filter((g) => g.list.length > 0);
+
+  if (groups.length === 0) {
+    container.innerHTML = "";
+    noProjectHint.textContent = "Für die aktuell eingetragene(n) Kostenstelle(n) sind noch keine Projekte angelegt.";
+    noProjectHint.style.display = "block";
+    return;
+  }
+  noProjectHint.style.display = "none";
+
+  container.innerHTML = groups.map(({ cc, list }) => {
+    const rowsHtml = list.map((pr) => {
+      const existing = (flow.draft.projectAllocations || []).find((a) => a.projectId === pr.id);
+      const value = typedValues[pr.id] !== undefined ? typedValues[pr.id] : (existing ? minutesToHHMM(existing.minutes) : "");
+      const color = PROJECT_PALETTE[pr.colorIndex % PROJECT_PALETTE.length];
+      return `
+        <div class="alloc-row">
+          <span class="alloc-swatch" style="background:${color};"></span>
+          <span class="alloc-name">${escapeHtml(pr.code)} — ${escapeHtml(pr.name)}</span>
+          <div class="alloc-input">
+            <input type="time" data-project-id="${pr.id}" data-parent-cc="${cc.id}" value="${value}" />
+          </div>
+          <span class="alloc-unit"></span>
+        </div>`;
+    }).join("");
+    return `
+      <div class="alloc-group-label" data-group-hint="${cc.id}">
+        <span>${escapeHtml(cc.code)} — ${escapeHtml(cc.name)}</span>
+        <span class="hint-inline"></span>
+      </div>
+      ${rowsHtml}`;
+  }).join("");
+
+  container.querySelectorAll("input[data-project-id]").forEach((inp) => inp.addEventListener("input", updateAllocGroupHints));
+  updateAllocGroupHints();
+}
+
+function updateAllocGroupHints() {
+  const ccMinutes = {};
+  document.querySelectorAll("#alloc-costcenter-rows input[data-cc-id]").forEach((inp) => {
+    ccMinutes[inp.dataset.ccId] = parseHHMM(inp.value);
+  });
+  document.querySelectorAll("#alloc-project-rows [data-group-hint]").forEach((label) => {
+    const ccId = label.dataset.groupHint;
+    const ccTotal = ccMinutes[ccId] || 0;
+    const allocated = Array.from(document.querySelectorAll(`#alloc-project-rows input[data-parent-cc="${ccId}"]`))
+      .reduce((s, inp) => s + parseHHMM(inp.value), 0);
+    const remaining = ccTotal - allocated;
+    const span = label.querySelector(".hint-inline");
+    if (allocated === 0) {
+      span.textContent = "";
+      span.className = "hint-inline";
+    } else if (remaining > 0.4) {
+      span.textContent = `noch ${fmtHoursDecimal(remaining)} h offen`;
+      span.className = "hint-inline warn";
+    } else if (remaining < -0.4) {
+      span.textContent = `${fmtHoursDecimal(-remaining)} h über Kostenstelle`;
+      span.className = "hint-inline warn";
+    } else {
+      span.textContent = "✓ vollständig";
+      span.className = "hint-inline ok";
+    }
+  });
 }
 
 function saveAllocation() {
   const allocations = readAllocRows();
   const projectAllocations = readProjectAllocRows();
-  const laborMinutes = parseFloat(document.getElementById("alloc-labor-minutes").value) || 0;
+  const laborMinutes = parseHHMM(document.getElementById("alloc-labor-minutes").value);
 
   const entry = {
     id: flow.editingId || uid(),
@@ -726,12 +798,20 @@ function renderCostCenters() {
       const id = btn.dataset.ccId;
       const cc = costCenters.find((c) => c.id === id);
       const usedIn = entries.filter((e) => (e.allocations || []).some((a) => a.costCenterId === id)).length;
-      const msg = usedIn > 0
-        ? `„${cc.code}" wird in ${usedIn} Eintrag/Einträgen verwendet. Trotzdem löschen? Die Zuordnung geht dabei verloren.`
-        : `Kostenstelle „${cc.code}" löschen?`;
+      const ownProjects = projects.filter((p) => p.costCenterId === id);
+      let msg = `Kostenstelle „${cc.code}" löschen?`;
+      if (ownProjects.length > 0) {
+        msg = `„${cc.code}" hat ${ownProjects.length} zugeordnete(s) Projekt(e) (${ownProjects.map((p) => p.code).join(", ")}). Diese werden mitgelöscht. `;
+      }
+      if (usedIn > 0) {
+        msg += `„${cc.code}" wird außerdem in ${usedIn} Eintrag/Einträgen verwendet – die Zuordnung geht dabei verloren. `;
+      }
+      msg += "Wirklich löschen?";
       if (!confirm(msg)) return;
       costCenters = costCenters.filter((c) => c.id !== id);
+      projects = projects.filter((p) => p.costCenterId !== id);
       saveCostCenters(costCenters);
+      saveProjects(projects);
       renderAll();
       toast("Kostenstelle gelöscht.");
     });
@@ -749,6 +829,8 @@ function addCostCenter(code, name) {
    ========================================================= */
 function renderProjects() {
   const container = document.getElementById("project-list");
+  populateProjectCostCenterSelect();
+
   if (projects.length === 0) {
     container.innerHTML = `
       <div class="empty-state">
@@ -759,6 +841,10 @@ function renderProjects() {
   }
   container.innerHTML = projects.map((pr) => {
     const color = PROJECT_PALETTE[pr.colorIndex % PROJECT_PALETTE.length];
+    const options = costCenters.map((cc) =>
+      `<option value="${cc.id}" ${cc.id === pr.costCenterId ? "selected" : ""}>${escapeHtml(cc.code)}</option>`
+    ).join("");
+    const missing = !costCenters.some((c) => c.id === pr.costCenterId);
     return `
       <div class="cc-row">
         <span class="cc-swatch" style="background:${color};"></span>
@@ -766,9 +852,23 @@ function renderProjects() {
           <div class="cc-code">${escapeHtml(pr.code)}</div>
           <div class="cc-name">${escapeHtml(pr.name)}</div>
         </div>
+        <select class="project-cc-select ${missing ? "missing" : ""}" data-project-id="${pr.id}">
+          ${missing ? `<option value="" selected disabled>Kostenstelle?</option>` : ""}
+          ${options}
+        </select>
         <button class="cc-del" data-project-id="${pr.id}" aria-label="Löschen">✕</button>
       </div>`;
   }).join("");
+
+  container.querySelectorAll(".project-cc-select").forEach((sel) => {
+    sel.addEventListener("change", () => {
+      const pr = projects.find((p) => p.id === sel.dataset.projectId);
+      pr.costCenterId = sel.value;
+      saveProjects(projects);
+      renderProjects();
+      toast("Kostenstelle aktualisiert.");
+    });
+  });
 
   container.querySelectorAll(".cc-del").forEach((btn) => {
     btn.addEventListener("click", () => {
@@ -787,8 +887,30 @@ function renderProjects() {
   });
 }
 
-function addProject(code, name) {
-  projects.push({ id: uid(), code: code.toUpperCase(), name, colorIndex: projects.length });
+function populateProjectCostCenterSelect() {
+  const select = document.getElementById("pr-costcenter");
+  const noCcHint = document.getElementById("project-no-cc-hint");
+  const submitBtn = document.querySelector("#form-project button[type=submit]");
+  const prevValue = select.value;
+
+  select.innerHTML = costCenters
+    .map((cc) => `<option value="${cc.id}">${escapeHtml(cc.code)} — ${escapeHtml(cc.name)}</option>`)
+    .join("");
+
+  if (costCenters.length === 0) {
+    noCcHint.style.display = "block";
+    select.disabled = true;
+    if (submitBtn) submitBtn.disabled = true;
+  } else {
+    noCcHint.style.display = "none";
+    select.disabled = false;
+    if (submitBtn) submitBtn.disabled = false;
+    if (costCenters.some((c) => c.id === prevValue)) select.value = prevValue;
+  }
+}
+
+function addProject(code, name, costCenterId) {
+  projects.push({ id: uid(), code: code.toUpperCase(), name, costCenterId, colorIndex: projects.length });
   saveProjects(projects);
   renderProjects();
 }
@@ -1231,7 +1353,7 @@ function wireEvents() {
     // keep whatever the user already typed so it isn't lost when going back
     flow.draft.allocations = readAllocRows();
     flow.draft.projectAllocations = readProjectAllocRows();
-    flow.draft.laborMinutes = parseFloat(document.getElementById("alloc-labor-minutes").value) || 0;
+    flow.draft.laborMinutes = parseHHMM(document.getElementById("alloc-labor-minutes").value);
     closeAllocSheet();
     openTimesSheet(flow.mode, flow.draft);
   });
@@ -1251,9 +1373,12 @@ function wireEvents() {
     ev.preventDefault();
     const code = document.getElementById("pr-code").value.trim();
     const name = document.getElementById("pr-name").value.trim();
+    const costCenterId = document.getElementById("pr-costcenter").value;
     if (!code || !name) return;
-    addProject(code, name);
+    if (!costCenterId) { toast("Bitte zuerst eine Kostenstelle anlegen und auswählen."); return; }
+    addProject(code, name, costCenterId);
     document.getElementById("form-project").reset();
+    populateProjectCostCenterSelect();
     toast("Projekt hinzugefügt.");
   });
 
