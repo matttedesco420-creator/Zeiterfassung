@@ -385,14 +385,18 @@ button, input, select, textarea { font-family: inherit; }
 }
 .tabbar-inner { display: flex; width: 100%; max-width: 560px; }
 .tab-btn {
-  flex: 1; background: none; border: none; padding: 10px 2px 8px;
-  display: flex; flex-direction: column; align-items: center; gap: 3px;
+  flex: 1; background: none; border: none; padding: 9px 1px 7px;
+  display: flex; flex-direction: column; align-items: center; gap: 2px;
   color: var(--text-faint); cursor: pointer; min-width: 0;
 }
-.tab-btn .ic { font-size: 18px; line-height: 1; }
+.tab-btn .ic { font-size: 17px; line-height: 1; }
 .tab-btn .lb {
-  font-size: 9.5px; font-weight: 600; letter-spacing: -0.01em;
+  font-size: 8.5px; font-weight: 600; letter-spacing: -0.02em;
   max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+@media (min-width: 420px) {
+  .tab-btn .ic { font-size: 18px; }
+  .tab-btn .lb { font-size: 10px; letter-spacing: -0.01em; }
 }
 
 /* Per-project Tätigkeit field, sits under its project's time row */

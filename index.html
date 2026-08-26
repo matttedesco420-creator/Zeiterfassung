@@ -35,6 +35,7 @@
         <input type="password" id="auth-password" autocomplete="current-password" required minlength="6" />
       </div>
       <p class="hint warn" id="auth-error" style="display:none;"></p>
+      <p class="hint" id="auth-diag" style="font-size:11px;"></p>
       <p class="hint ok" id="auth-info" style="display:none;"></p>
       <button type="submit" class="btn btn-primary btn-block" id="btn-auth-submit">Anmelden</button>
     </form>
@@ -150,10 +151,15 @@
     <div class="spacer-24"></div>
     <div id="project-list"></div>
 
-    <div class="section-label">Labore</div>
+  </section>
+
+  <!-- ============ LABORE VIEW ============ -->
+  <section class="view" id="view-labs">
+    <div class="section-label mb-0">Labore</div>
     <p class="hint" style="margin:6px 2px 16px;">
       Labore sind unabhängig von Kostenstellen und Projekten. Beim Erfassen eines Eintrags
-      kannst du Laborzeit auf die hier angelegten Labore aufteilen.
+      kannst du die Laborzeit auf die hier angelegten Labore aufteilen. Jedes Labor bekommt im
+      Excel-Export einen eigenen Block im Arbeitsblatt „Labor".
     </p>
 
     <form id="form-lab">
@@ -210,6 +216,8 @@
 
     <div class="stat-grid" id="export-stats"></div>
 
+    <p class="hint warn" id="local-mode-note" style="display:none; margin-top:14px;"></p>
+
     <button class="btn btn-secondary btn-block" id="btn-open-profile" style="margin-top:16px;">
       👤 Profildaten bearbeiten
     </button>
@@ -253,6 +261,9 @@
     </button>
     <button class="tab-btn" data-view="view-projects">
       <span class="ic">📁</span><span class="lb">Projekte</span>
+    </button>
+    <button class="tab-btn" data-view="view-labs">
+      <span class="ic">🧪</span><span class="lb">Labore</span>
     </button>
     <button class="tab-btn" data-view="view-vacation">
       <span class="ic">🌴</span><span class="lb">Urlaub</span>
@@ -351,6 +362,7 @@
     <div class="sheet-title">Konto</div>
     <div class="sheet-sub" id="account-email">–</div>
     <p class="hint" id="account-sync-status">–</p>
+    <p class="hint" id="account-version" style="font-size:11px;">–</p>
     <div class="sheet-actions">
       <button type="button" class="btn btn-secondary" id="btn-account-close">Schließen</button>
       <button type="button" class="btn btn-danger-ghost" id="btn-logout">Abmelden</button>

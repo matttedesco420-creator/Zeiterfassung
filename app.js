@@ -29,9 +29,19 @@ const LAB_PALETTE = [
 /* =========================================================
    Small helpers
    ========================================================= */
+/* Muss ein echtes UUID sein: die Supabase-Spalten sind vom Typ uuid.
+   Frühere Versionen erzeugten Kurz-IDs, wodurch das Speichern serverseitig fehlschlug. */
 function uid() {
-  return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+  if (typeof crypto !== "undefined" && crypto.randomUUID) return crypto.randomUUID();
+  // Fallback für ältere Browser
+  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    const v = c === "x" ? r : (r & 0x3) | 0x8;
+    return v.toString(16);
+  });
 }
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+function isUuid(v) { return typeof v === "string" && UUID_RE.test(v); }
 function todayStr() {
   const d = new Date();
   const off = d.getTimezoneOffset();
@@ -207,6 +217,50 @@ let timer = loadTimer();
 let profile = loadProfile();
 let vacations = loadVacations();
 let labs = loadLabs();
+
+/* Einmalige Migration: Frühere Versionen vergaben Kurz-IDs (z. B. "m2x1k3f9abc").
+   Supabase erwartet echte UUIDs, weshalb das Hochladen fehlschlug. Wir vergeben neue
+   UUIDs und schreiben ALLE Verweise (Zuteilungen) entsprechend um. */
+function migrateLegacyIds() {
+  const idMap = new Map();
+  const remap = (list) => list.forEach((item) => {
+    if (!isUuid(item.id)) {
+      const fresh = uid();
+      idMap.set(item.id, fresh);
+      item.id = fresh;
+    }
+  });
+  remap(costCenters);
+  remap(projects);
+  remap(labs);
+  remap(vacations);
+  remap(entries);
+
+  if (idMap.size === 0) return false;
+
+  projects.forEach((p) => {
+    if (idMap.has(p.costCenterId)) p.costCenterId = idMap.get(p.costCenterId);
+  });
+  entries.forEach((e) => {
+    (e.allocations || []).forEach((a) => {
+      if (idMap.has(a.costCenterId)) a.costCenterId = idMap.get(a.costCenterId);
+    });
+    (e.projectAllocations || []).forEach((a) => {
+      if (idMap.has(a.projectId)) a.projectId = idMap.get(a.projectId);
+    });
+    (e.laborAllocations || []).forEach((a) => {
+      if (idMap.has(a.labId)) a.labId = idMap.get(a.labId);
+    });
+  });
+
+  saveCostCenters(costCenters);
+  saveProjects(projects);
+  saveLabs(labs);
+  saveVacations(vacations);
+  saveEntries(entries);
+  return true;
+}
+const hadLegacyIds = migrateLegacyIds();
 let tickHandle = null;
 
 let flow = { mode: null, editingId: null, draft: null }; // shared draft used by the two sheets
@@ -216,6 +270,8 @@ let flow = { mode: null, editingId: null, draft: null }; // shared draft used by
    real credentials; otherwise the app stays purely local, exactly
    as before).
    ========================================================= */
+const APP_VERSION = "v12 (Sync-Fix)";
+
 const SB = (window.SUPABASE_CONFIG && window.SUPABASE_CONFIG.url && window.SUPABASE_CONFIG.anonKey)
   ? supabase.createClient(window.SUPABASE_CONFIG.url, window.SUPABASE_CONFIG.anonKey, {
       auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true },
@@ -229,6 +285,14 @@ let authMode = "login";
 let pendingRetries = [];
 
 function queueRetry(fn) { pendingRetries.push(fn); }
+
+/* Speicherfehler dürfen nicht stillschweigend passieren: sonst denkt man, alles sei
+   gespeichert, während serverseitig nichts ankommt. */
+function reportSyncError(what, error) {
+  console.error(`Sync-Fehler (${what}):`, error);
+  const msg = error && error.message ? error.message : String(error);
+  toast(`„${what}" nicht synchronisiert: ${msg.slice(0, 80)}`);
+}
 async function flushRetries() {
   if (!navigator.onLine || pendingRetries.length === 0) return;
   const jobs = pendingRetries;
@@ -282,7 +346,7 @@ function entryToRow(e) {
 async function pushCostCenter(cc) {
   if (!SB || !currentUser) return;
   const { error } = await SB.from("cost_centers").upsert(costCenterToRow(cc));
-  if (error) queueRetry(() => pushCostCenter(cc));
+  if (error) { reportSyncError("Kostenstelle", error); queueRetry(() => pushCostCenter(cc)); }
 }
 async function deleteCostCenterRemote(id) {
   if (!SB || !currentUser) return;
@@ -292,7 +356,7 @@ async function deleteCostCenterRemote(id) {
 async function pushProject(pr) {
   if (!SB || !currentUser) return;
   const { error } = await SB.from("projects").upsert(projectToRow(pr));
-  if (error) queueRetry(() => pushProject(pr));
+  if (error) { reportSyncError("Projekt", error); queueRetry(() => pushProject(pr)); }
 }
 async function deleteProjectRemote(id) {
   if (!SB || !currentUser) return;
@@ -302,14 +366,14 @@ async function deleteProjectRemote(id) {
 async function pushEntry(entry) {
   if (!SB || !currentUser) return;
   const { error } = await SB.from("entries").upsert(entryToRow(entry));
-  if (error) queueRetry(() => pushEntry(entry));
+  if (error) { reportSyncError("Eintrag", error); queueRetry(() => pushEntry(entry)); }
 }
 async function pushLab(lab) {
   if (!SB || !currentUser) return;
   const { error } = await SB.from("labs").upsert({
     id: lab.id, user_id: currentUser.id, code: lab.code, name: lab.name, color_index: lab.colorIndex,
   });
-  if (error) queueRetry(() => pushLab(lab));
+  if (error) { reportSyncError("Labor", error); queueRetry(() => pushLab(lab)); }
 }
 async function deleteLabRemote(id) {
   if (!SB || !currentUser) return;
@@ -321,7 +385,7 @@ async function pushVacation(v) {
   const { error } = await SB.from("vacations").upsert({
     id: v.id, user_id: currentUser.id, start_date: v.startDate, end_date: v.endDate,
   });
-  if (error) queueRetry(() => pushVacation(v));
+  if (error) { reportSyncError("Urlaub", error); queueRetry(() => pushVacation(v)); }
 }
 async function deleteVacationRemote(id) {
   if (!SB || !currentUser) return;
@@ -382,17 +446,33 @@ async function fetchAllFromSupabase() {
     SB.from("vacations").select("*").order("start_date"),
     SB.from("settings").select("*").eq("user_id", currentUser.id).maybeSingle(),
   ]);
-  if (ccRes.data) { costCenters = ccRes.data.map(rowToCostCenter); saveCostCenters(costCenters); }
-  if (prRes.data) { projects = prRes.data.map(rowToProject); saveProjects(projects); }
-  if (laRes.data) {
-    labs = laRes.data.map((r) => ({ id: r.id, code: r.code, name: r.name, colorIndex: r.color_index }));
-    saveLabs(labs);
+
+  const failed = [ccRes, prRes, laRes, enRes, vaRes].filter((r) => r.error);
+  if (failed.length) {
+    console.error("Supabase-Ladefehler:", failed.map((r) => r.error));
+    toast("Daten konnten nicht geladen werden – lokale Daten bleiben erhalten.");
+    return; // Bei Fehlern NICHT die lokalen Daten überschreiben.
   }
-  if (enRes.data) { entries = enRes.data.map(rowToEntry); saveEntries(entries); }
-  if (vaRes.data) {
-    vacations = vaRes.data.map((r) => ({ id: r.id, startDate: r.start_date, endDate: r.end_date }));
-    saveVacations(vacations);
+
+  // Ist die Datenbank leer, aber lokal liegen Daten (z. B. vor dem ersten Login erfasst,
+  // oder nach der ID-Migration), dann laden wir sie hoch statt sie zu löschen.
+  const remoteEmpty = !ccRes.data.length && !prRes.data.length && !laRes.data.length
+    && !enRes.data.length && !vaRes.data.length;
+  const localHasData = costCenters.length || projects.length || labs.length
+    || entries.length || vacations.length;
+  if (remoteEmpty && localHasData) {
+    await bulkReplaceRemote();
+    return;
   }
+
+  costCenters = ccRes.data.map(rowToCostCenter); saveCostCenters(costCenters);
+  projects = prRes.data.map(rowToProject); saveProjects(projects);
+  labs = laRes.data.map((r) => ({ id: r.id, code: r.code, name: r.name, colorIndex: r.color_index }));
+  saveLabs(labs);
+  entries = enRes.data.map(rowToEntry); saveEntries(entries);
+  vacations = vaRes.data.map((r) => ({ id: r.id, startDate: r.start_date, endDate: r.end_date }));
+  saveVacations(vacations);
+
   if (stRes.data) {
     profile = {
       firstName: stRes.data.first_name || "",
@@ -430,6 +510,13 @@ function handleRemoteChange() {
 /* ---- auth flow ---- */
 async function initAuth() {
   wireAuthEvents();
+  const diag = document.getElementById("auth-diag");
+  try {
+    const host = new URL(window.SUPABASE_CONFIG.url).host;
+    diag.textContent = `${APP_VERSION} · verbunden mit ${host}`;
+  } catch {
+    diag.textContent = `${APP_VERSION} · Konfiguration unvollständig`;
+  }
   const { data: { session } } = await SB.auth.getSession();
   if (session) {
     currentUser = session.user;
@@ -453,6 +540,15 @@ async function onLoggedIn() {
   document.getElementById("app-shell").style.display = "";
   document.getElementById("btn-account").style.display = "flex";
   await fetchAllFromSupabase();
+  if (hadLegacyIds) {
+    // Diese Daten konnten früher nie hochgeladen werden (ungültige IDs) – jetzt nachholen.
+    try {
+      await bulkReplaceRemote();
+      toast("Bestehende Daten wurden mit dem Konto synchronisiert.");
+    } catch (err) {
+      reportSyncError("Datenübernahme", err);
+    }
+  }
   if (!appInitialized) { init(); appInitialized = true; }
   else { renderAll(); renderTimer(); renderTopbarDate(); }
   subscribeRealtime();
@@ -510,7 +606,10 @@ function wireAuthEvents() {
         }
       }
     } catch (err) {
-      showAuthError(translateAuthError(err.message || String(err)));
+      const raw = err && (err.message || err.error_description) ? (err.message || err.error_description) : String(err);
+      showAuthError(translateAuthError(raw));
+      document.getElementById("auth-diag").textContent = `Technische Meldung: ${raw}`;
+      console.error("Auth-Fehler:", err);
     } finally {
       btn.disabled = false;
     }
@@ -518,6 +617,8 @@ function wireAuthEvents() {
 
   document.getElementById("btn-account").addEventListener("click", () => {
     document.getElementById("account-email").textContent = currentUser ? currentUser.email : "–";
+    document.getElementById("account-version").textContent =
+      `App ${APP_VERSION}${SB ? "" : " · ohne Supabase (lokaler Modus)"}`;
     document.getElementById("account-sync-status").textContent = pendingRetries.length
       ? "Nicht alles synchronisiert – wird bei Internetverbindung automatisch nachgeholt."
       : "Alles synchronisiert.";
@@ -1507,6 +1608,16 @@ function addVacation(startDate, endDate) {
    EXPORT view
    ========================================================= */
 function renderExportStats() {
+  const note = document.getElementById("local-mode-note");
+  if (note) {
+    if (SB) {
+      note.style.display = "none";
+    } else {
+      note.style.display = "block";
+      note.textContent = `Lokaler Modus (${APP_VERSION}): Daten liegen nur auf diesem Gerät. `
+        + "Für die Synchronisierung müssen url und anonKey in config.js eingetragen sein.";
+    }
+  }
   const container = document.getElementById("export-stats");
   const totalMinutes = entries.reduce((s, e) => s + e.totalMinutes, 0);
   const laborMinutes = entries.reduce((s, e) => s + (e.laborMinutes || 0), 0);
@@ -1963,7 +2074,8 @@ function switchView(id) {
   document.querySelectorAll(".tab-btn").forEach((b) => b.classList.toggle("active", b.dataset.view === id));
   if (id === "view-entries") renderEntries();
   if (id === "view-costcenters") renderCostCenters();
-  if (id === "view-projects") { renderProjects(); renderLabs(); }
+  if (id === "view-projects") renderProjects();
+  if (id === "view-labs") renderLabs();
   if (id === "view-vacation") renderVacations();
   if (id === "view-export") renderExportStats();
 }
