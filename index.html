@@ -151,6 +151,36 @@
     <div id="project-list"></div>
   </section>
 
+  <!-- ============ URLAUB VIEW ============ -->
+  <section class="view" id="view-vacation">
+    <div class="section-label mb-0">Urlaub</div>
+    <p class="hint" style="margin:6px 2px 16px;">
+      Trage Urlaubszeiträume ein. Die Werktage darin werden in den Monatsblättern markiert und
+      in der Übersicht als Ist-Urlaub des jeweiligen Monats gezählt. Wochenenden werden
+      automatisch übersprungen.
+    </p>
+
+    <form id="form-vacation">
+      <div class="field-row">
+        <div class="field">
+          <label for="vac-start">Von</label>
+          <input type="date" id="vac-start" required />
+        </div>
+        <div class="field">
+          <label for="vac-end">Bis</label>
+          <input type="date" id="vac-end" required />
+        </div>
+      </div>
+      <div class="hint" id="vac-hint">–</div>
+      <button type="submit" class="btn btn-secondary btn-block" style="margin-top:12px;">
+        + Urlaub speichern
+      </button>
+    </form>
+
+    <div class="spacer-24"></div>
+    <div id="vacation-list"></div>
+  </section>
+
   <!-- ============ EXPORT VIEW ============ -->
   <section class="view" id="view-export">
     <div class="section-label mb-0">Export</div>
@@ -201,6 +231,9 @@
     <button class="tab-btn" data-view="view-projects">
       <span class="ic">📁</span><span class="lb">Projekte</span>
     </button>
+    <button class="tab-btn" data-view="view-vacation">
+      <span class="ic">🌴</span><span class="lb">Urlaub</span>
+    </button>
     <button class="tab-btn" data-view="view-export">
       <span class="ic">⬇</span><span class="lb">Export</span>
     </button>
@@ -225,7 +258,7 @@
           <input type="time" id="f-start" required />
         </div>
         <div class="field">
-          <label for="f-end">Ende der Arbeit (Feierabend)</label>
+          <label for="f-end">Ende (Feierabend)</label>
           <input type="time" id="f-end" required />
         </div>
       </div>
@@ -238,10 +271,6 @@
           <label for="f-pause-end">Pause Ende</label>
           <input type="time" id="f-pause-end" />
         </div>
-      </div>
-      <div class="field">
-        <label for="f-activity">Tätigkeit</label>
-        <input type="text" id="f-activity" placeholder="z. B. Konzepterstellung, Support …" />
       </div>
       <div class="hint" id="times-total-hint">Gesamtarbeitszeit: –</div>
 

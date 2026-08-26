@@ -113,16 +113,22 @@ synchronisiert zwischen Handy und Rechner). Das heißt:
    nachtragen sowie bestehende Einträge antippen, bearbeiten oder löschen.
 3. **Kostenstellen:** Kunden/Rechnungsstellen mit Kürzel (z. B. "ACM") und Name anlegen.
    Diese stehen danach bei jedem Eintrag zur Aufteilung zur Verfügung.
-4. **Projekte:** Jedes Projekt gehört jetzt zu genau einer Kostenstelle (bei der Anlage
+4. **Projekte:** Jedes Projekt gehört zu genau einer Kostenstelle (bei der Anlage
    auswählen). Bei der Zeit-Aufteilung eines Eintrags erscheinen die Projekte einer
    Kostenstelle automatisch erst, sobald du bei dieser Kostenstelle Zeit eingetragen hast.
    Die Zeit-Eingabe erfolgt überall als Uhrzeit-Feld im Format Std:Min (z. B. 01:30).
-5. **Profildaten:** Im Export-Tab über „👤 Profildaten bearbeiten" – Vor-/Nachname (erscheint
+   Unter jedem Projekt gibt es ein Feld für die **Tätigkeit** – diese landet im
+   Excel-Export in der Spalte „Beschreibung" des jeweiligen Projekt-Blocks.
+5. **Urlaub:** Eigener Tab – Zeitraum von/bis eintragen und speichern. Wochenenden werden
+   automatisch übersprungen. Die Urlaubstage erscheinen in den Monatsblättern in der Spalte
+   „Urlaub" und werden in der Übersicht als Ist-Urlaub des jeweiligen Monats gezählt
+   (Werktage × tägliche Sollstunden).
+6. **Profildaten:** Im Export-Tab über „👤 Profildaten bearbeiten" – Vor-/Nachname (erscheint
    im Kopf jedes Monatsblatts sowie jeder Kostenstellen-Tabelle), Arbeitsstunden pro Woche
    und Urlaubstage pro Jahr. Letztere zwei befüllen automatisch die „Stunden pro Woche"- und
    „Urlaub Soll"-Zeilen der Übersicht (weiterhin manuell überschreibbar in Excel, z. B. wenn
    sich die Stunden während des Jahres ändern).
-6. **Export:** Erstellt die Excel-Datei mit folgenden Arbeitsblättern, in dieser Reihenfolge:
+7. **Export:** Erstellt die Excel-Datei mit folgenden Arbeitsblättern, in dieser Reihenfolge:
    - **Übersicht** – Jahresüberblick mit Soll/Ist-Arbeitszeit und Soll/Ist-Urlaub pro Monat plus
      Jahressummen und Differenz. Trage hier einmal pro Monat die „Stunden pro Woche" ein – der
      Tages-Soll-Wert in den Monatsblättern und die Soll-Summe hier berechnen sich automatisch
@@ -130,7 +136,7 @@ synchronisiert zwischen Handy und Rechner). Das heißt:
    - **Monatsblätter** – ein einziges Arbeitsblatt mit zwölf hintereinander gestapelten
      Tabellen (Jänner bis Dezember), jede im klassischen Arbeitsbericht-Format: pro
      Kalendertag eine Zeile mit Wochentag, Datum, Beginn/Ende, Pause von/bis, gearbeiteten
-     Stunden, Tätigkeit und Geschäftsstellen-Kürzel (alle aus deinen Einträgen übernommen).
+     Stunden, Geschäftsstellen-Kürzel und Urlaub (alle aus deinen Einträgen übernommen).
      Wochenenden bleiben leer. Das Tages-Soll wird nicht mehr als eigene Spalte geführt,
      sondern intern direkt aus der Anzahl Werktage im Monat × „Stunden pro Woche" berechnet.
    - **Gesamt** – wie bisher: alle Tage flach aufgelistet mit einer Spalte je Kostenstelle und

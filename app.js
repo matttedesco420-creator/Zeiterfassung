@@ -8,6 +8,7 @@ const K = {
   costCenters: "azt_costcenters_v1",
   projects: "azt_projects_v1",
   profile: "azt_profile_v1",
+  vacations: "azt_vacations_v1",
   timer: "azt_timer_v1",
 };
 
@@ -132,6 +133,36 @@ function loadProfile() {
 }
 function saveProfile(p) { localStorage.setItem(K.profile, JSON.stringify(p)); }
 
+function loadVacations() {
+  try { return JSON.parse(localStorage.getItem(K.vacations)) || []; }
+  catch { return []; }
+}
+function saveVacations(list) { localStorage.setItem(K.vacations, JSON.stringify(list)); }
+
+/* Returns every ISO date between start and end (inclusive), weekends excluded. */
+function vacationWeekdaysInRange(startISO, endISO) {
+  const out = [];
+  const [sy, sm, sd] = startISO.split("-").map(Number);
+  const [ey, em, ed] = endISO.split("-").map(Number);
+  const cur = new Date(sy, sm - 1, sd);
+  const end = new Date(ey, em - 1, ed);
+  while (cur <= end) {
+    const dow = cur.getDay();
+    if (dow !== 0 && dow !== 6) {
+      out.push(`${cur.getFullYear()}-${String(cur.getMonth() + 1).padStart(2, "0")}-${String(cur.getDate()).padStart(2, "0")}`);
+    }
+    cur.setDate(cur.getDate() + 1);
+  }
+  return out;
+}
+
+/* Set of all ISO dates covered by any saved vacation range (weekdays only). */
+function vacationDateSet() {
+  const set = new Set();
+  vacations.forEach((v) => vacationWeekdaysInRange(v.startDate, v.endDate).forEach((d) => set.add(d)));
+  return set;
+}
+
 /* Austrian month labels used for the Übersicht header row and the Monatsblatt sheet names */
 const MONTHS_AT = [
   { short: "Jän", full: "Jänner" },
@@ -164,6 +195,7 @@ let costCenters = loadCostCenters();
 let projects = loadProjects();
 let timer = loadTimer();
 let profile = loadProfile();
+let vacations = loadVacations();
 let tickHandle = null;
 
 let flow = { mode: null, editingId: null, draft: null }; // shared draft used by the two sheets
@@ -226,7 +258,7 @@ function rowToEntry(row) {
 function entryToRow(e) {
   return {
     id: e.id, user_id: currentUser.id, date: e.date, start: e.start, end: e.end,
-    pause_start: e.pauseStart, pause_end: e.pauseEnd, activity: e.activity,
+    pause_start: e.pauseStart, pause_end: e.pauseEnd, activity: e.activity || null,
     total_minutes: e.totalMinutes, allocations: e.allocations || [],
     project_allocations: e.projectAllocations || [], labor_minutes: e.laborMinutes,
     source: e.source, updated_at: new Date().toISOString(),
@@ -259,6 +291,18 @@ async function pushEntry(entry) {
   const { error } = await SB.from("entries").upsert(entryToRow(entry));
   if (error) queueRetry(() => pushEntry(entry));
 }
+async function pushVacation(v) {
+  if (!SB || !currentUser) return;
+  const { error } = await SB.from("vacations").upsert({
+    id: v.id, user_id: currentUser.id, start_date: v.startDate, end_date: v.endDate,
+  });
+  if (error) queueRetry(() => pushVacation(v));
+}
+async function deleteVacationRemote(id) {
+  if (!SB || !currentUser) return;
+  const { error } = await SB.from("vacations").delete().eq("id", id);
+  if (error) queueRetry(() => deleteVacationRemote(id));
+}
 async function deleteEntryRemote(id) {
   if (!SB || !currentUser) return;
   const { error } = await SB.from("entries").delete().eq("id", id);
@@ -286,22 +330,33 @@ async function bulkReplaceRemote() {
   await SB.from("entries").delete().eq("user_id", currentUser.id);
   await SB.from("cost_centers").delete().eq("user_id", currentUser.id);
   await SB.from("projects").delete().eq("user_id", currentUser.id);
+  await SB.from("vacations").delete().eq("user_id", currentUser.id);
   if (costCenters.length) await SB.from("cost_centers").insert(costCenters.map(costCenterToRow));
   if (projects.length) await SB.from("projects").insert(projects.map(projectToRow));
   if (entries.length) await SB.from("entries").insert(entries.map(entryToRow));
+  if (vacations.length) {
+    await SB.from("vacations").insert(vacations.map((v) => ({
+      id: v.id, user_id: currentUser.id, start_date: v.startDate, end_date: v.endDate,
+    })));
+  }
 }
 
 async function fetchAllFromSupabase() {
   if (!SB || !currentUser) return;
-  const [ccRes, prRes, enRes, stRes] = await Promise.all([
+  const [ccRes, prRes, enRes, vaRes, stRes] = await Promise.all([
     SB.from("cost_centers").select("*").order("created_at"),
     SB.from("projects").select("*").order("created_at"),
     SB.from("entries").select("*").order("date"),
+    SB.from("vacations").select("*").order("start_date"),
     SB.from("settings").select("*").eq("user_id", currentUser.id).maybeSingle(),
   ]);
   if (ccRes.data) { costCenters = ccRes.data.map(rowToCostCenter); saveCostCenters(costCenters); }
   if (prRes.data) { projects = prRes.data.map(rowToProject); saveProjects(projects); }
   if (enRes.data) { entries = enRes.data.map(rowToEntry); saveEntries(entries); }
+  if (vaRes.data) {
+    vacations = vaRes.data.map((r) => ({ id: r.id, startDate: r.start_date, endDate: r.end_date }));
+    saveVacations(vacations);
+  }
   if (stRes.data) {
     profile = {
       firstName: stRes.data.first_name || "",
@@ -321,6 +376,7 @@ function subscribeRealtime() {
     .on("postgres_changes", { event: "*", schema: "public", table: "entries", filter }, handleRemoteChange)
     .on("postgres_changes", { event: "*", schema: "public", table: "cost_centers", filter }, handleRemoteChange)
     .on("postgres_changes", { event: "*", schema: "public", table: "projects", filter }, handleRemoteChange)
+    .on("postgres_changes", { event: "*", schema: "public", table: "vacations", filter }, handleRemoteChange)
     .on("postgres_changes", { event: "*", schema: "public", table: "settings", filter }, handleRemoteChange)
     .subscribe();
 }
@@ -748,10 +804,18 @@ function entryCardHTML(e) {
       <div class="entry-meta">
         <span>${e.start}–${e.end}</span>
         ${e.pauseStart && e.pauseEnd ? `<span>Pause ${e.pauseStart}–${e.pauseEnd}</span>` : ""}
-        ${e.activity ? `<span>${escapeHtml(e.activity)}</span>` : ""}
+        ${entryActivitySummary(e) ? `<span>${escapeHtml(entryActivitySummary(e))}</span>` : ""}
       </div>
       ${(tags || projectTags || laborTag || unallocTag) ? `<div class="entry-tags">${tags}${projectTags}${laborTag}${unallocTag}</div>` : ""}
     </div>`;
+}
+
+/* Tätigkeiten werden jetzt je Projekt erfasst; für Listen/Übersichten fassen wir sie zusammen. */
+function entryActivitySummary(e) {
+  return (e.projectAllocations || [])
+    .map((a) => (a.activity || "").trim())
+    .filter(Boolean)
+    .join("; ");
 }
 
 /* =========================================================
@@ -771,7 +835,6 @@ function openTimesSheet(mode, entry) {
   document.getElementById("f-end").value = entry.end || "";
   document.getElementById("f-pause-start").value = entry.pauseStart || "";
   document.getElementById("f-pause-end").value = entry.pauseEnd || "";
-  document.getElementById("f-activity").value = entry.activity || "";
 
   document.getElementById("times-delete-row").style.display = mode === "edit" ? "block" : "none";
   document.getElementById("btn-times-next").textContent =
@@ -798,7 +861,6 @@ function readTimesForm() {
     end: document.getElementById("f-end").value,
     pauseStart: document.getElementById("f-pause-start").value,
     pauseEnd: document.getElementById("f-pause-end").value,
-    activity: document.getElementById("f-activity").value.trim(),
   };
 }
 
@@ -828,7 +890,7 @@ function proceedToAllocation() {
     ...flow.draft,
     date: v.date, start: v.start, end: v.end,
     pauseStart: v.pauseStart, pauseEnd: v.pauseEnd,
-    activity: v.activity, totalMinutes: total,
+    totalMinutes: total,
   };
 
   closeTimesSheet();
@@ -904,7 +966,14 @@ function readProjectAllocRows() {
   const rows = [];
   document.querySelectorAll("#alloc-project-rows input[data-project-id]").forEach((inp) => {
     const minutes = parseHHMM(inp.value);
-    if (minutes > 0) rows.push({ projectId: inp.dataset.projectId, minutes });
+    if (minutes > 0) {
+      const actInput = document.querySelector(`#alloc-project-rows input[data-project-activity="${inp.dataset.projectId}"]`);
+      rows.push({
+        projectId: inp.dataset.projectId,
+        minutes,
+        activity: actInput ? actInput.value.trim() : "",
+      });
+    }
   });
   return rows;
 }
@@ -939,6 +1008,10 @@ function renderAllocProjectRows() {
   const typedValues = {};
   container.querySelectorAll("input[data-project-id]").forEach((inp) => {
     typedValues[inp.dataset.projectId] = inp.value;
+  });
+  const typedActivities = {};
+  container.querySelectorAll("input[data-project-activity]").forEach((inp) => {
+    typedActivities[inp.dataset.projectActivity] = inp.value;
   });
 
   const ccMinutes = {};
@@ -979,6 +1052,9 @@ function renderAllocProjectRows() {
     const rowsHtml = list.map((pr) => {
       const existing = (flow.draft.projectAllocations || []).find((a) => a.projectId === pr.id);
       const value = typedValues[pr.id] !== undefined ? typedValues[pr.id] : (existing ? minutesToHHMM(existing.minutes) : "");
+      const activity = typedActivities[pr.id] !== undefined
+        ? typedActivities[pr.id]
+        : (existing ? (existing.activity || "") : "");
       const color = PROJECT_PALETTE[pr.colorIndex % PROJECT_PALETTE.length];
       return `
         <div class="alloc-row">
@@ -988,6 +1064,10 @@ function renderAllocProjectRows() {
             <input type="time" data-project-id="${pr.id}" data-parent-cc="${cc.id}" value="${value}" />
           </div>
           <span class="alloc-unit"></span>
+        </div>
+        <div class="alloc-activity">
+          <input type="text" data-project-activity="${pr.id}"
+            placeholder="Tätigkeit für ${escapeHtml(pr.code)} …" value="${escapeHtml(activity)}" />
         </div>`;
     }).join("");
     return `
@@ -1042,7 +1122,6 @@ function saveAllocation() {
     end: flow.draft.end,
     pauseStart: flow.draft.pauseStart,
     pauseEnd: flow.draft.pauseEnd,
-    activity: flow.draft.activity,
     totalMinutes: flow.draft.totalMinutes,
     allocations, projectAllocations, laborMinutes,
     source: flow.draft.source || (flow.mode === "timer-finish" ? "timer" : "manual"),
@@ -1219,6 +1298,72 @@ function addProject(code, name, costCenterId) {
 }
 
 /* =========================================================
+   VACATION view
+   ========================================================= */
+function renderVacations() {
+  const container = document.getElementById("vacation-list");
+  if (vacations.length === 0) {
+    container.innerHTML = `
+      <div class="empty-state">
+        <div class="icon">🌴</div>
+        <p>Noch kein Urlaub eingetragen.</p>
+      </div>`;
+    return;
+  }
+  const sorted = [...vacations].sort((a, b) => (a.startDate < b.startDate ? 1 : -1));
+  container.innerHTML = sorted.map((v) => {
+    const days = vacationWeekdaysInRange(v.startDate, v.endDate).length;
+    const sameDay = v.startDate === v.endDate;
+    return `
+      <div class="cc-row">
+        <span class="cc-swatch" style="background:var(--teal);"></span>
+        <div class="cc-info">
+          <div class="cc-code">${sameDay ? fmtDatePlain(v.startDate) : `${fmtDatePlain(v.startDate)} – ${fmtDatePlain(v.endDate)}`}</div>
+          <div class="cc-name">${days} Werktag${days === 1 ? "" : "e"}</div>
+        </div>
+        <button class="cc-del" data-vacation-id="${v.id}" aria-label="Löschen">✕</button>
+      </div>`;
+  }).join("");
+
+  container.querySelectorAll(".cc-del").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const id = btn.dataset.vacationId;
+      if (!confirm("Diesen Urlaubszeitraum löschen?")) return;
+      vacations = vacations.filter((v) => v.id !== id);
+      saveVacations(vacations);
+      renderVacations();
+      toast("Urlaub gelöscht.");
+      deleteVacationRemote(id);
+    });
+  });
+}
+
+function updateVacationHint() {
+  const start = document.getElementById("vac-start").value;
+  const end = document.getElementById("vac-end").value;
+  const hint = document.getElementById("vac-hint");
+  if (!start || !end) { hint.textContent = "Wähle Start- und Enddatum."; hint.className = "hint"; return; }
+  if (end < start) {
+    hint.textContent = "Das Enddatum liegt vor dem Startdatum.";
+    hint.className = "hint warn";
+    return;
+  }
+  const days = vacationWeekdaysInRange(start, end).length;
+  hint.textContent = days === 0
+    ? "Dieser Zeitraum enthält nur Wochenendtage – es werden keine Urlaubstage gezählt."
+    : `${days} Werktag${days === 1 ? "" : "e"} Urlaub`;
+  hint.className = days === 0 ? "hint warn" : "hint ok";
+}
+
+function addVacation(startDate, endDate) {
+  const v = { id: uid(), startDate, endDate };
+  vacations.push(v);
+  saveVacations(vacations);
+  renderVacations();
+  pushVacation(v);
+}
+
+/* =========================================================
    EXPORT view
    ========================================================= */
 function renderExportStats() {
@@ -1261,7 +1406,7 @@ function buildUebersichtSheet(year, monatsblaetterName, monthTotals) {
   aoa.push([]);
   aoa.push(["", ...MONTHS_AT.map((m) => m.short), "", "Σ Urlaubszeiten /a"]);
   aoa.push(["Soll", ...Array(12).fill(monthlyVacationHours), "", 0]);
-  aoa.push(["Ist", ...Array(12).fill(0), "", 0]);
+  aoa.push(["Ist", ...monthTotals.map((m) => Number(((m.vacationDays || 0) * dailyHours).toFixed(2))), "", 0]);
   aoa.push(["Differenz", ...Array(12).fill(""), "", 0]);
 
   const ws = XLSX.utils.aoa_to_sheet(aoa);
@@ -1302,6 +1447,7 @@ function buildMonatsblaetterSheet(year, overviewSheetName) {
   const boldCells = [];
   const monthTotals = [];
   const fullName = [profile.firstName, profile.lastName].filter(Boolean).join(" ");
+  const vacationDays = vacationDateSet();
   let cursor = 0; // 0-indexed row cursor
 
   MONTHS_AT.forEach((meta, monthIndex) => {
@@ -1310,11 +1456,12 @@ function buildMonatsblaetterSheet(year, overviewSheetName) {
     const isoPrefix = `${year}-${String(monthIndex + 1).padStart(2, "0")}`;
     const blockStart = cursor;
     let weekdayCount = 0;
+    let monthVacationDays = 0;
 
     aoa.push(["SOLL", 0, "", `Arbeitsbericht ${meta.full} ${year}`, "", "", ""]);
     aoa.push(["IST", 0, "", fullName, "", "", ""]);
     aoa.push([]);
-    aoa.push(["Tag", "Datum", "Arbeitszeit", "", "Pause", "", "Stunden gearbeitet", "Tätigkeit", "Geschäftsstellen-Kürzel"]);
+    aoa.push(["Tag", "Datum", "Arbeitszeit", "", "Pause", "", "Stunden gearbeitet", "Geschäftsstellen-Kürzel", "Urlaub"]);
     aoa.push(["", "", "Beginn", "Ende", "von", "bis", "", "", ""]);
     boldCells.push({ r: blockStart, c: 3 }); // "Arbeitsbericht {Monat} {Jahr}" title
 
@@ -1339,6 +1486,8 @@ function buildMonatsblaetterSheet(year, overviewSheetName) {
               .map((c) => c.code)
               .join(", ")
           : "";
+        const onVacation = vacationDays.has(iso);
+        if (onVacation) monthVacationDays++;
         aoa.push([
           wd, dateStr,
           entry ? entry.start || "" : "",
@@ -1346,8 +1495,8 @@ function buildMonatsblaetterSheet(year, overviewSheetName) {
           entry ? entry.pauseStart || "" : "",
           entry ? entry.pauseEnd || "" : "",
           entry ? Number((entry.totalMinutes / 60).toFixed(2)) : 0,
-          entry ? entry.activity || "" : "",
           ccCodes,
+          onVacation ? "Urlaub" : "",
         ]);
       }
     }
@@ -1373,6 +1522,7 @@ function buildMonatsblaetterSheet(year, overviewSheetName) {
     monthTotals.push({
       sollAddr: XLSX.utils.encode_cell({ r: blockStart, c: 1 }),
       istAddr: XLSX.utils.encode_cell({ r: blockStart + 1, c: 1 }),
+      vacationDays: monthVacationDays,
     });
 
     cursor = dataEnd + 2; // gap row between this month's block and the next
@@ -1390,7 +1540,7 @@ function buildMonatsblaetterSheet(year, overviewSheetName) {
   ws["!merges"] = merges;
   ws["!cols"] = [
     { wch: 6 }, { wch: 12 }, { wch: 9 }, { wch: 9 }, { wch: 8 }, { wch: 8 },
-    { wch: 13 }, { wch: 26 }, { wch: 14 },
+    { wch: 13 }, { wch: 16 }, { wch: 9 },
   ];
   return { ws, monthTotals };
 }
@@ -1409,11 +1559,11 @@ function buildBlockSheet(titleLabel, relevantEntries, generalHoursFn, projectHou
     const laborH = e.laborMinutes ? Number((e.laborMinutes / 60).toFixed(2)) : "";
     const projAllocs = e.projectAllocations || [];
     if (projAllocs.length === 0) {
-      noneRows.push([fmtDatePlain(e.date), generalHoursFn(e), laborH, e.activity || ""]);
+      noneRows.push([fmtDatePlain(e.date), generalHoursFn(e), laborH, ""]);
     } else {
       projAllocs.forEach((pa) => {
         const arr = projectRowsMap.get(pa.projectId) || [];
-        arr.push([fmtDatePlain(e.date), projectHoursFn(e, pa), laborH, e.activity || ""]);
+        arr.push([fmtDatePlain(e.date), projectHoursFn(e, pa), laborH, pa.activity || ""]);
         projectRowsMap.set(pa.projectId, arr);
       });
     }
@@ -1507,7 +1657,7 @@ function exportExcel() {
   const rows = sorted.map((e) => {
     const row = [
       fmtDateDisplay(e.date), e.start || "", e.end || "", e.pauseStart || "", e.pauseEnd || "",
-      Number((e.totalMinutes / 60).toFixed(2)), e.activity || "",
+      Number((e.totalMinutes / 60).toFixed(2)), entryActivitySummary(e),
     ];
     costCenters.forEach((cc) => {
       const alloc = (e.allocations || []).find((a) => a.costCenterId === cc.id);
@@ -1552,7 +1702,7 @@ function exportExcel() {
   // ---- Labor sheet (unchanged) ----
   const laborRows = sorted
     .filter((e) => e.laborMinutes > 0)
-    .map((e) => [fmtDateDisplay(e.date), e.activity || "", Number((e.laborMinutes / 60).toFixed(2))]);
+    .map((e) => [fmtDateDisplay(e.date), entryActivitySummary(e), Number((e.laborMinutes / 60).toFixed(2))]);
   const laborSum = laborRows.reduce((s, r) => s + r[2], 0);
   const laborAoa = [["Datum", "Tätigkeit", "Labor-Stunden"], ...laborRows, [], ["", "Summe", Number(laborSum.toFixed(2))]];
   const wsLabor = XLSX.utils.aoa_to_sheet(laborAoa);
@@ -1568,7 +1718,7 @@ function exportExcel() {
    Backup import / export (JSON)
    ========================================================= */
 function exportJSON() {
-  const data = { entries, costCenters, projects, exportedAt: new Date().toISOString() };
+  const data = { entries, costCenters, projects, vacations, exportedAt: new Date().toISOString() };
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
@@ -1588,9 +1738,11 @@ function importJSON(file) {
       entries = data.entries;
       costCenters = data.costCenters;
       projects = Array.isArray(data.projects) ? data.projects : [];
+      vacations = Array.isArray(data.vacations) ? data.vacations : [];
       saveEntries(entries);
       saveCostCenters(costCenters);
       saveProjects(projects);
+      saveVacations(vacations);
       renderAll();
       toast("Backup importiert.");
       bulkReplaceRemote();
@@ -1604,8 +1756,9 @@ function importJSON(file) {
 function resetAll() {
   if (!confirm("Wirklich ALLE Einträge und Kostenstellen unwiderruflich löschen?")) return;
   if (!confirm("Bist du sicher? Dieser Schritt kann nicht rückgängig gemacht werden.")) return;
-  entries = []; costCenters = []; projects = []; timer = { status: "idle" };
-  saveEntries(entries); saveCostCenters(costCenters); saveProjects(projects); saveTimer(timer);
+  entries = []; costCenters = []; projects = []; vacations = []; timer = { status: "idle" };
+  saveEntries(entries); saveCostCenters(costCenters); saveProjects(projects);
+  saveVacations(vacations); saveTimer(timer);
   renderAll();
   toast("Alle Daten wurden gelöscht.");
   bulkReplaceRemote();
@@ -1626,6 +1779,7 @@ function switchView(id) {
   if (id === "view-entries") renderEntries();
   if (id === "view-costcenters") renderCostCenters();
   if (id === "view-projects") renderProjects();
+  if (id === "view-vacation") renderVacations();
   if (id === "view-export") renderExportStats();
 }
 
@@ -1634,6 +1788,7 @@ function renderAll() {
   renderEntries();
   renderCostCenters();
   renderProjects();
+  renderVacations();
   renderExportStats();
 }
 
@@ -1697,6 +1852,23 @@ function wireEvents() {
     document.getElementById("form-project").reset();
     populateProjectCostCenterSelect();
     toast("Projekt hinzugefügt.");
+  });
+
+  ["vac-start", "vac-end"].forEach((id) =>
+    document.getElementById(id).addEventListener("input", updateVacationHint));
+  document.getElementById("form-vacation").addEventListener("submit", (ev) => {
+    ev.preventDefault();
+    const start = document.getElementById("vac-start").value;
+    const end = document.getElementById("vac-end").value;
+    if (!start || !end) return;
+    if (end < start) { toast("Das Enddatum liegt vor dem Startdatum."); return; }
+    if (vacationWeekdaysInRange(start, end).length === 0) {
+      toast("Dieser Zeitraum enthält keine Werktage."); return;
+    }
+    addVacation(start, end);
+    document.getElementById("form-vacation").reset();
+    updateVacationHint();
+    toast("Urlaub gespeichert.");
   });
 
   document.getElementById("btn-export").addEventListener("click", exportExcel);

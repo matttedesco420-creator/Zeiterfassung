@@ -1,6 +1,6 @@
 // Bump this version string whenever index.html/app.js/styles.css change,
 // otherwise devices that already installed the app keep serving old cached files.
-const CACHE_NAME = "arbeitszeit-tracker-v8";
+const CACHE_NAME = "arbeitszeit-tracker-v9";
 const PRECACHE_URLS = [
   "./",
   "./index.html",

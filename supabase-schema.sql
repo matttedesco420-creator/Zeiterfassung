@@ -43,6 +43,14 @@ create table if not exists public.entries (
   updated_at timestamptz not null default now()
 );
 
+create table if not exists public.vacations (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  start_date date not null,
+  end_date date not null,
+  created_at timestamptz not null default now()
+);
+
 create table if not exists public.settings (
   user_id uuid primary key references auth.users(id) on delete cascade,
   employee_name text,
@@ -62,6 +70,7 @@ create index if not exists entries_user_date_idx on public.entries(user_id, date
 create index if not exists cost_centers_user_idx on public.cost_centers(user_id);
 create index if not exists projects_user_idx on public.projects(user_id);
 create index if not exists projects_cc_idx on public.projects(cost_center_id);
+create index if not exists vacations_user_idx on public.vacations(user_id, start_date);
 
 -- ---------- Row Level Security ----------
 -- Jede Zeile gehört genau einem Nutzer (user_id = auth.uid()).
@@ -70,6 +79,7 @@ create index if not exists projects_cc_idx on public.projects(cost_center_id);
 alter table public.cost_centers enable row level security;
 alter table public.projects     enable row level security;
 alter table public.entries      enable row level security;
+alter table public.vacations    enable row level security;
 alter table public.settings     enable row level security;
 
 -- "drop policy if exists" davor macht das Skript gefahrlos wiederholbar.
@@ -85,6 +95,10 @@ drop policy if exists "own rows" on public.entries;
 create policy "own rows" on public.entries
   for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 
+drop policy if exists "own rows" on public.vacations;
+create policy "own rows" on public.vacations
+  for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
 drop policy if exists "own rows" on public.settings;
 create policy "own rows" on public.settings
   for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
@@ -98,7 +112,7 @@ create policy "own rows" on public.settings
 do $$
 declare t text;
 begin
-  foreach t in array array['cost_centers', 'projects', 'entries', 'settings'] loop
+  foreach t in array array['cost_centers', 'projects', 'entries', 'vacations', 'settings'] loop
     if not exists (
       select 1 from pg_publication_tables
       where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = t

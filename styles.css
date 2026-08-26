@@ -246,8 +246,26 @@ button, input, select, textarea { font-family: inherit; }
 .field input:focus, .field select:focus, .field textarea:focus {
   outline: 2px solid var(--brass-light); outline-offset: 1px; border-color: var(--brass);
 }
-.field-row { display: flex; gap: 10px; }
-.field-row .field { flex: 1; }
+.field-row { display: flex; gap: 10px; align-items: flex-start; }
+.field-row .field { flex: 1 1 0; min-width: 0; }
+/* Labels of different lengths (one vs two lines) would otherwise push their inputs to
+   different heights, which looked broken on narrow phones. Bottom-aligning the label text
+   keeps the inputs on a shared baseline. */
+.field-row .field label {
+  min-height: 2.4em;
+  display: flex;
+  align-items: flex-end;
+}
+.field input[type="date"], .field input[type="time"] {
+  text-align: left;
+  min-width: 0;
+  -webkit-appearance: none;
+  appearance: none;
+}
+@media (max-width: 400px) {
+  .field-row { flex-direction: column; gap: 0; }
+  .field-row .field label { min-height: 0; }
+}
 .hint { font-size: 12px; color: var(--text-faint); margin-top: 4px; }
 .hint.warn { color: var(--rust); }
 .hint.ok { color: var(--teal); }
@@ -367,12 +385,23 @@ button, input, select, textarea { font-family: inherit; }
 }
 .tabbar-inner { display: flex; width: 100%; max-width: 560px; }
 .tab-btn {
-  flex: 1; background: none; border: none; padding: 10px 4px 8px;
+  flex: 1; background: none; border: none; padding: 10px 2px 8px;
   display: flex; flex-direction: column; align-items: center; gap: 3px;
-  color: var(--text-faint); cursor: pointer;
+  color: var(--text-faint); cursor: pointer; min-width: 0;
 }
-.tab-btn .ic { font-size: 19px; line-height: 1; }
-.tab-btn .lb { font-size: 10.5px; font-weight: 600; letter-spacing: 0.01em; }
+.tab-btn .ic { font-size: 18px; line-height: 1; }
+.tab-btn .lb {
+  font-size: 9.5px; font-weight: 600; letter-spacing: -0.01em;
+  max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+/* Per-project Tätigkeit field, sits under its project's time row */
+.alloc-activity { margin: -4px 0 12px 20px; }
+.alloc-activity input {
+  width: 100%; border: 1px solid var(--border); border-radius: 8px;
+  padding: 8px 10px; font-size: 13.5px; background: var(--surface); color: var(--text);
+}
+.alloc-activity input::placeholder { color: var(--text-faint); }
 .tab-btn.active { color: var(--ink); }
 .tab-btn.active .ic { color: var(--brass); }
 
