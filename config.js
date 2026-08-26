@@ -11,6 +11,6 @@
 // (wie bisher) - dann synchronisiert nichts zwischen Geräten.
 
 window.SUPABASE_CONFIG = {
-  url: "",       // z. B. "https://abcdefgh.supabase.co"
-  anonKey: "",   // z. B. "eyJhbGciOi..."
+  url: "https://nckoavawcddhfmfzjofv.supabase.co",       // z. B. "https://abcdefgh.supabase.co"
+  anonKey: "sb_publishable_N30d3BVxPcrh-9eB9YY-HA_sGnBi2G_",   // z. B. "eyJhbGciOi..."
 };
