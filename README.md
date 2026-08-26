@@ -119,16 +119,20 @@ synchronisiert zwischen Handy und Rechner). Das heißt:
    Die Zeit-Eingabe erfolgt überall als Uhrzeit-Feld im Format Std:Min (z. B. 01:30).
    Unter jedem Projekt gibt es ein Feld für die **Tätigkeit** – diese landet im
    Excel-Export in der Spalte „Beschreibung" des jeweiligen Projekt-Blocks.
-5. **Urlaub:** Eigener Tab – Zeitraum von/bis eintragen und speichern. Wochenenden werden
+5. **Labore:** Ebenfalls im Tab „Projekte", Abschnitt „Labore" – unabhängig von
+   Kostenstellen und Projekten. Beim Erfassen eines Eintrags teilst du die Laborzeit auf
+   die angelegten Labore auf. Im Excel-Export bekommt jedes Labor einen eigenen Block im
+   Arbeitsblatt „Labor" sowie eine eigene Spalte im Blatt „Gesamt".
+6. **Urlaub:** Eigener Tab – Zeitraum von/bis eintragen und speichern. Wochenenden werden
    automatisch übersprungen. Die Urlaubstage erscheinen in den Monatsblättern in der Spalte
    „Urlaub" und werden in der Übersicht als Ist-Urlaub des jeweiligen Monats gezählt
    (Werktage × tägliche Sollstunden).
-6. **Profildaten:** Im Export-Tab über „👤 Profildaten bearbeiten" – Vor-/Nachname (erscheint
+7. **Profildaten:** Im Export-Tab über „👤 Profildaten bearbeiten" – Vor-/Nachname (erscheint
    im Kopf jedes Monatsblatts sowie jeder Kostenstellen-Tabelle), Arbeitsstunden pro Woche
    und Urlaubstage pro Jahr. Letztere zwei befüllen automatisch die „Stunden pro Woche"- und
    „Urlaub Soll"-Zeilen der Übersicht (weiterhin manuell überschreibbar in Excel, z. B. wenn
    sich die Stunden während des Jahres ändern).
-7. **Export:** Erstellt die Excel-Datei mit folgenden Arbeitsblättern, in dieser Reihenfolge:
+8. **Export:** Erstellt die Excel-Datei mit folgenden Arbeitsblättern, in dieser Reihenfolge:
    - **Übersicht** – Jahresüberblick mit Soll/Ist-Arbeitszeit und Soll/Ist-Urlaub pro Monat plus
      Jahressummen und Differenz. Trage hier einmal pro Monat die „Stunden pro Woche" ein – der
      Tages-Soll-Wert in den Monatsblättern und die Soll-Summe hier berechnen sich automatisch
@@ -146,7 +150,8 @@ synchronisiert zwischen Handy und Rechner). Das heißt:
      eines „Allgemein"-Blocks für Zeit ohne Projektzuordnung. (Falls mal Zeit einem Projekt,
      aber keiner Kostenstelle zugeordnet wurde, landet das automatisch in einem zusätzlichen
      Arbeitsblatt „Projekte ohne Kostenstelle", damit nichts verloren geht.)
-   - **Labor** – die unabhängig erfasste Laborzeit.
+   - **Labor** – die Laborzeiten, je Labor als eigener Spaltenblock nebeneinander
+     (Datum | h | Beschreibung).
 
    Optional kannst du im Export-Tab einmalig deinen Namen eintragen – er erscheint dann im Kopf
    jedes Monatsblatts.

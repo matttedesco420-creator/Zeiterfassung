@@ -149,6 +149,29 @@
 
     <div class="spacer-24"></div>
     <div id="project-list"></div>
+
+    <div class="section-label">Labore</div>
+    <p class="hint" style="margin:6px 2px 16px;">
+      Labore sind unabhängig von Kostenstellen und Projekten. Beim Erfassen eines Eintrags
+      kannst du Laborzeit auf die hier angelegten Labore aufteilen.
+    </p>
+
+    <form id="form-lab">
+      <div class="field-row">
+        <div class="field" style="flex:0 0 90px;">
+          <label for="lab-code">Kürzel</label>
+          <input type="text" id="lab-code" maxlength="10" placeholder="z. B. CHE" required />
+        </div>
+        <div class="field" style="flex:1;">
+          <label for="lab-name">Name</label>
+          <input type="text" id="lab-name" placeholder="z. B. Chemielabor" required />
+        </div>
+      </div>
+      <button type="submit" class="btn btn-secondary btn-block">+ Labor hinzufügen</button>
+    </form>
+
+    <div class="spacer-24"></div>
+    <div id="lab-list"></div>
   </section>
 
   <!-- ============ URLAUB VIEW ============ -->
@@ -308,13 +331,11 @@
     </p>
 
     <div class="section-label">Laborzeit (unabhängig von Kostenstelle &amp; Projekt)</div>
-    <div class="alloc-row">
-      <span class="alloc-swatch" style="background:var(--teal);"></span>
-      <span class="alloc-name">Labor-Anteil</span>
-      <div class="alloc-input"><input type="time" id="alloc-labor-minutes" /></div>
-      <span class="alloc-unit"></span>
-    </div>
-    <p class="hint">Wird zusätzlich, unabhängig von der Kostenstellen-Zuordnung, im Arbeitsblatt „Labor“ erfasst.</p>
+    <div id="alloc-lab-rows"></div>
+    <div class="hint" id="alloc-lab-total-hint"></div>
+    <p class="hint" id="alloc-no-lab" style="display:none;">
+      Noch keine Labore angelegt. Du kannst das im Tab „Projekte“ unter „Labore“ nachholen.
+    </p>
 
     <div class="sheet-actions">
       <button type="button" class="btn btn-secondary" id="btn-alloc-back">Zurück</button>

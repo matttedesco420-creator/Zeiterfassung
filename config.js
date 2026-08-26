@@ -1,7 +1,7 @@
 // Trage hier deine eigenen Supabase-Zugangsdaten ein.
 // Zu finden in deinem Supabase-Projekt unter: Project Settings -> API
-//   - "https://nckoavawcddhfmfzjofv.supabase.co"      -> SUPABASE_URL
-//   - "sb_publishable_N30d3BVxPcrh-9eB9YY-HA_sGnBi2G_" Key  -> SUPABASE_ANON_KEY
+//   - "Project URL"      -> SUPABASE_URL
+//   - "anon public" Key  -> SUPABASE_ANON_KEY
 //
 // Der "anon" Key ist bewusst öffentlich/clientseitig sichtbar (das ist bei Supabase so
 // vorgesehen) - der eigentliche Schutz kommt durch die Row-Level-Security-Regeln aus

@@ -9,6 +9,7 @@ const K = {
   projects: "azt_projects_v1",
   profile: "azt_profile_v1",
   vacations: "azt_vacations_v1",
+  labs: "azt_labs_v1",
   timer: "azt_timer_v1",
 };
 
@@ -20,7 +21,10 @@ const PROJECT_PALETTE = [
   "#3D6EA5", "#B4532C", "#5E8C3F", "#8C4A8F",
   "#C2A233", "#6B5CA5", "#A34D64", "#4F6B8C",
 ];
-const LABOR_COLOR = "#2F7A64";
+const LAB_PALETTE = [
+  "#2F7A64", "#3E7B8C", "#7A6B3F", "#6E4C7A",
+  "#8C5A3C", "#4A7A4E", "#5A5F8C", "#8C4A5E",
+];
 
 /* =========================================================
    Small helpers
@@ -139,6 +143,12 @@ function loadVacations() {
 }
 function saveVacations(list) { localStorage.setItem(K.vacations, JSON.stringify(list)); }
 
+function loadLabs() {
+  try { return JSON.parse(localStorage.getItem(K.labs)) || []; }
+  catch { return []; }
+}
+function saveLabs(list) { localStorage.setItem(K.labs, JSON.stringify(list)); }
+
 /* Returns every ISO date between start and end (inclusive), weekends excluded. */
 function vacationWeekdaysInRange(startISO, endISO) {
   const out = [];
@@ -196,6 +206,7 @@ let projects = loadProjects();
 let timer = loadTimer();
 let profile = loadProfile();
 let vacations = loadVacations();
+let labs = loadLabs();
 let tickHandle = null;
 
 let flow = { mode: null, editingId: null, draft: null }; // shared draft used by the two sheets
@@ -249,7 +260,8 @@ function rowToEntry(row) {
     id: row.id, date: row.date, start: row.start, end: row.end,
     pauseStart: row.pause_start, pauseEnd: row.pause_end, activity: row.activity,
     totalMinutes: row.total_minutes, allocations: row.allocations || [],
-    projectAllocations: row.project_allocations || [], laborMinutes: row.labor_minutes,
+    projectAllocations: row.project_allocations || [],
+    laborAllocations: row.labor_allocations || [], laborMinutes: row.labor_minutes,
     source: row.source,
     createdAt: row.created_at ? new Date(row.created_at).getTime() : Date.now(),
     updatedAt: row.updated_at ? new Date(row.updated_at).getTime() : Date.now(),
@@ -260,7 +272,8 @@ function entryToRow(e) {
     id: e.id, user_id: currentUser.id, date: e.date, start: e.start, end: e.end,
     pause_start: e.pauseStart, pause_end: e.pauseEnd, activity: e.activity || null,
     total_minutes: e.totalMinutes, allocations: e.allocations || [],
-    project_allocations: e.projectAllocations || [], labor_minutes: e.laborMinutes,
+    project_allocations: e.projectAllocations || [],
+    labor_allocations: e.laborAllocations || [], labor_minutes: e.laborMinutes,
     source: e.source, updated_at: new Date().toISOString(),
   };
 }
@@ -290,6 +303,18 @@ async function pushEntry(entry) {
   if (!SB || !currentUser) return;
   const { error } = await SB.from("entries").upsert(entryToRow(entry));
   if (error) queueRetry(() => pushEntry(entry));
+}
+async function pushLab(lab) {
+  if (!SB || !currentUser) return;
+  const { error } = await SB.from("labs").upsert({
+    id: lab.id, user_id: currentUser.id, code: lab.code, name: lab.name, color_index: lab.colorIndex,
+  });
+  if (error) queueRetry(() => pushLab(lab));
+}
+async function deleteLabRemote(id) {
+  if (!SB || !currentUser) return;
+  const { error } = await SB.from("labs").delete().eq("id", id);
+  if (error) queueRetry(() => deleteLabRemote(id));
 }
 async function pushVacation(v) {
   if (!SB || !currentUser) return;
@@ -331,8 +356,14 @@ async function bulkReplaceRemote() {
   await SB.from("cost_centers").delete().eq("user_id", currentUser.id);
   await SB.from("projects").delete().eq("user_id", currentUser.id);
   await SB.from("vacations").delete().eq("user_id", currentUser.id);
+  await SB.from("labs").delete().eq("user_id", currentUser.id);
   if (costCenters.length) await SB.from("cost_centers").insert(costCenters.map(costCenterToRow));
   if (projects.length) await SB.from("projects").insert(projects.map(projectToRow));
+  if (labs.length) {
+    await SB.from("labs").insert(labs.map((l) => ({
+      id: l.id, user_id: currentUser.id, code: l.code, name: l.name, color_index: l.colorIndex,
+    })));
+  }
   if (entries.length) await SB.from("entries").insert(entries.map(entryToRow));
   if (vacations.length) {
     await SB.from("vacations").insert(vacations.map((v) => ({
@@ -343,15 +374,20 @@ async function bulkReplaceRemote() {
 
 async function fetchAllFromSupabase() {
   if (!SB || !currentUser) return;
-  const [ccRes, prRes, enRes, vaRes, stRes] = await Promise.all([
+  const [ccRes, prRes, laRes, enRes, vaRes, stRes] = await Promise.all([
     SB.from("cost_centers").select("*").order("created_at"),
     SB.from("projects").select("*").order("created_at"),
+    SB.from("labs").select("*").order("created_at"),
     SB.from("entries").select("*").order("date"),
     SB.from("vacations").select("*").order("start_date"),
     SB.from("settings").select("*").eq("user_id", currentUser.id).maybeSingle(),
   ]);
   if (ccRes.data) { costCenters = ccRes.data.map(rowToCostCenter); saveCostCenters(costCenters); }
   if (prRes.data) { projects = prRes.data.map(rowToProject); saveProjects(projects); }
+  if (laRes.data) {
+    labs = laRes.data.map((r) => ({ id: r.id, code: r.code, name: r.name, colorIndex: r.color_index }));
+    saveLabs(labs);
+  }
   if (enRes.data) { entries = enRes.data.map(rowToEntry); saveEntries(entries); }
   if (vaRes.data) {
     vacations = vaRes.data.map((r) => ({ id: r.id, startDate: r.start_date, endDate: r.end_date }));
@@ -377,6 +413,7 @@ function subscribeRealtime() {
     .on("postgres_changes", { event: "*", schema: "public", table: "cost_centers", filter }, handleRemoteChange)
     .on("postgres_changes", { event: "*", schema: "public", table: "projects", filter }, handleRemoteChange)
     .on("postgres_changes", { event: "*", schema: "public", table: "vacations", filter }, handleRemoteChange)
+    .on("postgres_changes", { event: "*", schema: "public", table: "labs", filter }, handleRemoteChange)
     .on("postgres_changes", { event: "*", schema: "public", table: "settings", filter }, handleRemoteChange)
     .subscribe();
 }
@@ -943,8 +980,7 @@ function openAllocSheet() {
     }));
   }
 
-  document.getElementById("alloc-labor-minutes").value = minutesToHHMM(flow.draft.laborMinutes);
-  document.getElementById("alloc-labor-minutes").oninput = updateAllocRemainingHint;
+  renderAllocLabRows();
 
   updateAllocRemainingHint();
   renderAllocProjectRows();
@@ -1113,7 +1149,8 @@ function updateAllocGroupHints() {
 function saveAllocation() {
   const allocations = readAllocRows();
   const projectAllocations = readProjectAllocRows();
-  const laborMinutes = parseHHMM(document.getElementById("alloc-labor-minutes").value);
+  const laborAllocations = readLabAllocRows();
+  const laborMinutes = laborAllocations.reduce((sum, a) => sum + a.minutes, 0);
 
   const entry = {
     id: flow.editingId || uid(),
@@ -1123,7 +1160,7 @@ function saveAllocation() {
     pauseStart: flow.draft.pauseStart,
     pauseEnd: flow.draft.pauseEnd,
     totalMinutes: flow.draft.totalMinutes,
-    allocations, projectAllocations, laborMinutes,
+    allocations, projectAllocations, laborAllocations, laborMinutes,
     source: flow.draft.source || (flow.mode === "timer-finish" ? "timer" : "manual"),
     createdAt: flow.draft.createdAt || Date.now(),
     updatedAt: Date.now(),
@@ -1297,6 +1334,108 @@ function addProject(code, name, costCenterId) {
   pushProject(pr);
 }
 
+/* Laborzeit wird auf die selbst angelegten Labore aufgeteilt. */
+function renderAllocLabRows() {
+  const container = document.getElementById("alloc-lab-rows");
+  const noLabHint = document.getElementById("alloc-no-lab");
+  const totalHint = document.getElementById("alloc-lab-total-hint");
+
+  if (labs.length === 0) {
+    container.innerHTML = "";
+    noLabHint.style.display = "block";
+    totalHint.textContent = "";
+    return;
+  }
+  noLabHint.style.display = "none";
+
+  container.innerHTML = labs.map((lab) => {
+    const existing = (flow.draft.laborAllocations || []).find((a) => a.labId === lab.id);
+    const color = LAB_PALETTE[lab.colorIndex % LAB_PALETTE.length];
+    return `
+      <div class="alloc-row">
+        <span class="alloc-swatch" style="background:${color};"></span>
+        <span class="alloc-name">${escapeHtml(lab.code)} — ${escapeHtml(lab.name)}</span>
+        <div class="alloc-input">
+          <input type="time" data-lab-id="${lab.id}" value="${existing ? minutesToHHMM(existing.minutes) : ""}" />
+        </div>
+        <span class="alloc-unit"></span>
+      </div>`;
+  }).join("");
+
+  container.querySelectorAll("input[data-lab-id]").forEach((inp) =>
+    inp.addEventListener("input", updateLabTotalHint));
+  updateLabTotalHint();
+}
+
+function readLabAllocRows() {
+  const rows = [];
+  document.querySelectorAll("#alloc-lab-rows input[data-lab-id]").forEach((inp) => {
+    const minutes = parseHHMM(inp.value);
+    if (minutes > 0) rows.push({ labId: inp.dataset.labId, minutes });
+  });
+  return rows;
+}
+
+function updateLabTotalHint() {
+  const hint = document.getElementById("alloc-lab-total-hint");
+  const total = readLabAllocRows().reduce((s, a) => s + a.minutes, 0);
+  if (total === 0) { hint.textContent = ""; hint.className = "hint"; return; }
+  hint.textContent = `Laborzeit gesamt: ${fmtHoursDecimal(total)} h`;
+  hint.className = "hint ok";
+}
+
+/* =========================================================
+   LABS management (independent of cost centers and projects)
+   ========================================================= */
+function renderLabs() {
+  const container = document.getElementById("lab-list");
+  if (labs.length === 0) {
+    container.innerHTML = `
+      <div class="empty-state">
+        <div class="icon">🧪</div>
+        <p>Noch keine Labore angelegt.</p>
+      </div>`;
+    return;
+  }
+  container.innerHTML = labs.map((lab) => {
+    const color = LAB_PALETTE[lab.colorIndex % LAB_PALETTE.length];
+    return `
+      <div class="cc-row">
+        <span class="cc-swatch" style="background:${color};"></span>
+        <div class="cc-info">
+          <div class="cc-code">${escapeHtml(lab.code)}</div>
+          <div class="cc-name">${escapeHtml(lab.name)}</div>
+        </div>
+        <button class="cc-del" data-lab-id="${lab.id}" aria-label="Löschen">✕</button>
+      </div>`;
+  }).join("");
+
+  container.querySelectorAll(".cc-del").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const id = btn.dataset.labId;
+      const lab = labs.find((l) => l.id === id);
+      const usedIn = entries.filter((e) => (e.laborAllocations || []).some((a) => a.labId === id)).length;
+      const msg = usedIn > 0
+        ? `„${lab.code}" wird in ${usedIn} Eintrag/Einträgen verwendet. Trotzdem löschen? Die Zuordnung geht dabei verloren.`
+        : `Labor „${lab.code}" löschen?`;
+      if (!confirm(msg)) return;
+      labs = labs.filter((l) => l.id !== id);
+      saveLabs(labs);
+      renderAll();
+      toast("Labor gelöscht.");
+      deleteLabRemote(id);
+    });
+  });
+}
+
+function addLab(code, name) {
+  const lab = { id: uid(), code: code.toUpperCase(), name, colorIndex: labs.length };
+  labs.push(lab);
+  saveLabs(labs);
+  renderLabs();
+  pushLab(lab);
+}
+
 /* =========================================================
    VACATION view
    ========================================================= */
@@ -1331,6 +1470,7 @@ function renderVacations() {
       if (!confirm("Diesen Urlaubszeitraum löschen?")) return;
       vacations = vacations.filter((v) => v.id !== id);
       saveVacations(vacations);
+      saveLabs(labs);
       renderVacations();
       toast("Urlaub gelöscht.");
       deleteVacationRemote(id);
@@ -1375,6 +1515,7 @@ function renderExportStats() {
     <div class="stat-box"><div class="n">${fmtHoursDecimal(totalMinutes)} h</div><div class="l">Erfasste Arbeitszeit</div></div>
     <div class="stat-box"><div class="n">${costCenters.length}</div><div class="l">Kostenstellen</div></div>
     <div class="stat-box"><div class="n">${projects.length}</div><div class="l">Projekte</div></div>
+    <div class="stat-box"><div class="n">${labs.length}</div><div class="l">Labore</div></div>
     <div class="stat-box"><div class="n">${fmtHoursDecimal(laborMinutes)} h</div><div class="l">davon Labor</div></div>
   `;
 }
@@ -1653,7 +1794,7 @@ function exportExcel() {
     "Gesamtarbeitszeit (h)", "Tätigkeit",
     ...costCenters.map((c) => c.code),
     ...projects.map((p) => `${p.code} (Projekt)`),
-    "Labor (h)"];
+    ...labs.map((l) => `${l.code} (Labor)`)];
   const rows = sorted.map((e) => {
     const row = [
       fmtDateDisplay(e.date), e.start || "", e.end || "", e.pauseStart || "", e.pauseEnd || "",
@@ -1667,7 +1808,10 @@ function exportExcel() {
       const alloc = (e.projectAllocations || []).find((a) => a.projectId === pr.id);
       row.push(alloc ? Number((alloc.minutes / 60).toFixed(2)) : "");
     });
-    row.push(e.laborMinutes ? Number((e.laborMinutes / 60).toFixed(2)) : "");
+    labs.forEach((lab) => {
+      const alloc = (e.laborAllocations || []).find((a) => a.labId === lab.id);
+      row.push(alloc ? Number((alloc.minutes / 60).toFixed(2)) : "");
+    });
     return row;
   });
   const ws1 = XLSX.utils.aoa_to_sheet([header, ...rows]);
@@ -1699,14 +1843,52 @@ function exportExcel() {
     XLSX.utils.book_append_sheet(wb, ws, sanitizeSheetName("Projekte ohne Kostenstelle", usedNames));
   }
 
-  // ---- Labor sheet (unchanged) ----
-  const laborRows = sorted
-    .filter((e) => e.laborMinutes > 0)
-    .map((e) => [fmtDateDisplay(e.date), entryActivitySummary(e), Number((e.laborMinutes / 60).toFixed(2))]);
-  const laborSum = laborRows.reduce((s, r) => s + r[2], 0);
-  const laborAoa = [["Datum", "Tätigkeit", "Labor-Stunden"], ...laborRows, [], ["", "Summe", Number(laborSum.toFixed(2))]];
-  const wsLabor = XLSX.utils.aoa_to_sheet(laborAoa);
-  wsLabor["!cols"] = [{ wch: 12 }, { wch: 34 }, { wch: 12 }];
+  // ---- Labor sheet: one side-by-side block per Labor ----
+  const labBlocks = labs.map((lab) => {
+    const rows = sorted
+      .map((e) => {
+        const alloc = (e.laborAllocations || []).find((a) => a.labId === lab.id);
+        if (!alloc) return null;
+        return [fmtDatePlain(e.date), Number((alloc.minutes / 60).toFixed(2)), entryActivitySummary(e)];
+      })
+      .filter(Boolean);
+    return {
+      label: lab.name || lab.code,
+      rows,
+      sum: Number(rows.reduce((s, r) => s + r[1], 0).toFixed(2)),
+    };
+  });
+  if (labBlocks.length === 0) labBlocks.push({ label: "Labor", rows: [], sum: 0 });
+
+  const labMaxRows = Math.max(0, ...labBlocks.map((b) => b.rows.length));
+  const labAoa = [];
+  const labName = [profile.firstName, profile.lastName].filter(Boolean).join(" ");
+  labAoa.push(["Laborzeiten", "", "", ...(labName ? [labName] : [])]);
+  const labRow2 = [], labRow3 = [];
+  labBlocks.forEach((b, i) => {
+    const last = i === labBlocks.length - 1;
+    labRow2.push(b.label, b.sum, "");
+    labRow3.push("Datum", "h", "Beschreibung");
+    if (!last) { labRow2.push(""); labRow3.push(""); }
+  });
+  labAoa.push(labRow2);
+  labAoa.push(labRow3);
+  for (let i = 0; i < labMaxRows; i++) {
+    const row = [];
+    labBlocks.forEach((b, bi) => {
+      const last = bi === labBlocks.length - 1;
+      if (b.rows[i]) row.push(...b.rows[i]);
+      else row.push("", "", "");
+      if (!last) row.push("");
+    });
+    labAoa.push(row);
+  }
+  const wsLabor = XLSX.utils.aoa_to_sheet(labAoa);
+  wsLabor["!cols"] = labBlocks.flatMap((b, i) => {
+    const cols = [{ wch: 11 }, { wch: 7 }, { wch: 30 }];
+    if (i < labBlocks.length - 1) cols.push({ wch: 2 });
+    return cols;
+  });
   XLSX.utils.book_append_sheet(wb, wsLabor, sanitizeSheetName("Labor", usedNames));
 
   const filename = `Arbeitszeit_Export_${todayStr()}.xlsx`;
@@ -1718,7 +1900,7 @@ function exportExcel() {
    Backup import / export (JSON)
    ========================================================= */
 function exportJSON() {
-  const data = { entries, costCenters, projects, vacations, exportedAt: new Date().toISOString() };
+  const data = { entries, costCenters, projects, labs, vacations, exportedAt: new Date().toISOString() };
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
@@ -1739,10 +1921,12 @@ function importJSON(file) {
       costCenters = data.costCenters;
       projects = Array.isArray(data.projects) ? data.projects : [];
       vacations = Array.isArray(data.vacations) ? data.vacations : [];
+      labs = Array.isArray(data.labs) ? data.labs : [];
       saveEntries(entries);
       saveCostCenters(costCenters);
       saveProjects(projects);
       saveVacations(vacations);
+      saveLabs(labs);
       renderAll();
       toast("Backup importiert.");
       bulkReplaceRemote();
@@ -1756,9 +1940,10 @@ function importJSON(file) {
 function resetAll() {
   if (!confirm("Wirklich ALLE Einträge und Kostenstellen unwiderruflich löschen?")) return;
   if (!confirm("Bist du sicher? Dieser Schritt kann nicht rückgängig gemacht werden.")) return;
-  entries = []; costCenters = []; projects = []; vacations = []; timer = { status: "idle" };
+  entries = []; costCenters = []; projects = []; labs = []; vacations = [];
+  timer = { status: "idle" };
   saveEntries(entries); saveCostCenters(costCenters); saveProjects(projects);
-  saveVacations(vacations); saveTimer(timer);
+  saveLabs(labs); saveVacations(vacations); saveTimer(timer);
   renderAll();
   toast("Alle Daten wurden gelöscht.");
   bulkReplaceRemote();
@@ -1778,7 +1963,7 @@ function switchView(id) {
   document.querySelectorAll(".tab-btn").forEach((b) => b.classList.toggle("active", b.dataset.view === id));
   if (id === "view-entries") renderEntries();
   if (id === "view-costcenters") renderCostCenters();
-  if (id === "view-projects") renderProjects();
+  if (id === "view-projects") { renderProjects(); renderLabs(); }
   if (id === "view-vacation") renderVacations();
   if (id === "view-export") renderExportStats();
 }
@@ -1788,6 +1973,7 @@ function renderAll() {
   renderEntries();
   renderCostCenters();
   renderProjects();
+  renderLabs();
   renderVacations();
   renderExportStats();
 }
@@ -1825,7 +2011,8 @@ function wireEvents() {
     // keep whatever the user already typed so it isn't lost when going back
     flow.draft.allocations = readAllocRows();
     flow.draft.projectAllocations = readProjectAllocRows();
-    flow.draft.laborMinutes = parseHHMM(document.getElementById("alloc-labor-minutes").value);
+    flow.draft.laborAllocations = readLabAllocRows();
+    flow.draft.laborMinutes = flow.draft.laborAllocations.reduce((sum, a) => sum + a.minutes, 0);
     closeAllocSheet();
     openTimesSheet(flow.mode, flow.draft);
   });
@@ -1852,6 +2039,16 @@ function wireEvents() {
     document.getElementById("form-project").reset();
     populateProjectCostCenterSelect();
     toast("Projekt hinzugefügt.");
+  });
+
+  document.getElementById("form-lab").addEventListener("submit", (ev) => {
+    ev.preventDefault();
+    const code = document.getElementById("lab-code").value.trim();
+    const name = document.getElementById("lab-name").value.trim();
+    if (!code || !name) return;
+    addLab(code, name);
+    document.getElementById("form-lab").reset();
+    toast("Labor hinzugefügt.");
   });
 
   ["vac-start", "vac-end"].forEach((id) =>
