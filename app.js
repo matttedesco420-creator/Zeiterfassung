@@ -270,7 +270,7 @@ let flow = { mode: null, editingId: null, draft: null }; // shared draft used by
    real credentials; otherwise the app stays purely local, exactly
    as before).
    ========================================================= */
-const APP_VERSION = "v14 (Datenverlust-Fix)";
+const APP_VERSION = "v15 (Projekt & Lab)";
 
 const SB = (window.SUPABASE_CONFIG && window.SUPABASE_CONFIG.url && window.SUPABASE_CONFIG.anonKey)
   ? supabase.createClient(window.SUPABASE_CONFIG.url, window.SUPABASE_CONFIG.anonKey, {
@@ -2193,8 +2193,7 @@ function switchView(id) {
   document.querySelectorAll(".tab-btn").forEach((b) => b.classList.toggle("active", b.dataset.view === id));
   if (id === "view-entries") renderEntries();
   if (id === "view-costcenters") renderCostCenters();
-  if (id === "view-projects") renderProjects();
-  if (id === "view-labs") renderLabs();
+  if (id === "view-projects") { renderProjects(); renderLabs(); }
   if (id === "view-vacation") renderVacations();
   if (id === "view-export") renderExportStats();
 }

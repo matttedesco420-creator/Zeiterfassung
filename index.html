@@ -124,7 +124,7 @@
     <div class="section-label mb-0">Projekte</div>
     <p class="hint" style="margin:6px 2px 16px;">
       Lege hier Projekte an – jedes Projekt gehört zu genau einer Kostenstelle und erscheint als
-      Unterpunkt in deren Arbeitsblatt im Excel-Export.
+      Unterpunkt in deren Arbeitsblatt im Excel-Export. Weiter unten verwaltest du die Labore.
     </p>
 
     <form id="form-project">
@@ -151,15 +151,11 @@
     <div class="spacer-24"></div>
     <div id="project-list"></div>
 
-  </section>
-
-  <!-- ============ LABORE VIEW ============ -->
-  <section class="view" id="view-labs">
-    <div class="section-label mb-0">Labore</div>
+    <div class="section-label">Labore</div>
     <p class="hint" style="margin:6px 2px 16px;">
       Labore sind unabhängig von Kostenstellen und Projekten. Beim Erfassen eines Eintrags
       kannst du die Laborzeit auf die hier angelegten Labore aufteilen. Jedes Labor bekommt im
-      Excel-Export einen eigenen Block im Arbeitsblatt „Labor".
+      Excel-Export einen eigenen Block im Arbeitsblatt „Labor“.
     </p>
 
     <form id="form-lab">
@@ -178,6 +174,7 @@
 
     <div class="spacer-24"></div>
     <div id="lab-list"></div>
+
   </section>
 
   <!-- ============ URLAUB VIEW ============ -->
@@ -260,10 +257,7 @@
       <span class="ic">🏷</span><span class="lb">Kosten</span>
     </button>
     <button class="tab-btn" data-view="view-projects">
-      <span class="ic">📁</span><span class="lb">Projekte</span>
-    </button>
-    <button class="tab-btn" data-view="view-labs">
-      <span class="ic">🧪</span><span class="lb">Labore</span>
+      <span class="ic">📁</span><span class="lb">Projekt &amp; Lab</span>
     </button>
     <button class="tab-btn" data-view="view-vacation">
       <span class="ic">🌴</span><span class="lb">Urlaub</span>
