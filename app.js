@@ -64,20 +64,67 @@ function fmtDatePlain(dateStr) {
   const [y, m, d] = dateStr.split("-");
   return `${d}.${m}.${y}`;
 }
-function parseHHMM(value) {
-  if (!value) return 0;
-  const parts = value.split(":");
-  if (parts.length !== 2) return 0;
-  const h = Number(parts[0]), m = Number(parts[1]);
-  if (Number.isNaN(h) || Number.isNaN(m)) return 0;
-  return h * 60 + m;
+/* Eingabe erfolgt in Dezimalstunden (z. B. "2,5" = 2 h 30 min).
+   Intern rechnen wir weiterhin in Minuten. Komma und Punkt sind beide erlaubt. */
+function parseHoursInput(value) {
+  if (value === null || value === undefined) return 0;
+  const n = parseFloat(String(value).trim().replace(",", "."));
+  if (Number.isNaN(n) || n < 0) return 0;
+  return Math.round(n * 60);
 }
-function minutesToHHMM(minutes) {
+function minutesToHoursInput(minutes) {
   if (!minutes || minutes <= 0) return "";
-  const h = Math.floor(minutes / 60);
-  const m = Math.round(minutes % 60);
-  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+  return (minutes / 60)
+    .toFixed(2)
+    .replace(/0+$/, "")
+    .replace(/\.$/, "")
+    .replace(".", ",");
 }
+
+/* Baut eine Zuteilungszeile: Name, darunter Prozent-Schnellwahl und Stundenfeld.
+   Die Prozente beziehen sich auf die Gesamtarbeitszeit des Eintrags. */
+function allocRowHTML({ color, label, attr, id, value, extraAttr = "" }) {
+  return `
+    <div class="alloc-row">
+      <span class="alloc-swatch" style="background:${color};"></span>
+      <span class="alloc-name">${label}</span>
+    </div>
+    <div class="alloc-controls">
+      <div class="pct-group">
+        <button type="button" class="pct-btn" data-pct="-25" data-for="${id}">-25%</button>
+        <button type="button" class="pct-btn" data-pct="-10" data-for="${id}">-10%</button>
+        <button type="button" class="pct-btn" data-pct="10" data-for="${id}">+10%</button>
+        <button type="button" class="pct-btn" data-pct="25" data-for="${id}">+25%</button>
+      </div>
+      <div class="alloc-input">
+        <input type="text" inputmode="decimal" placeholder="0"
+          ${attr}="${id}" ${extraAttr} value="${value}" />
+      </div>
+      <span class="alloc-unit">h</span>
+    </div>`;
+}
+
+/* Prozent-Buttons: addieren/subtrahieren einen Anteil der Gesamtarbeitszeit. */
+function wirePercentButtons(container, onChange) {
+  container.querySelectorAll(".pct-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const id = btn.dataset.for;
+      const input = container.querySelector(
+        `[data-cc-id="${id}"], [data-project-id="${id}"], [data-lab-id="${id}"]`
+      );
+      if (!input) return;
+      const total = flow.draft.totalMinutes || 0;
+      if (total <= 0) return;
+      /* In Prozentschritten rechnen statt gerundete Minuten aufzuaddieren: sonst
+         summieren sich Rundungsfehler (4 x +25% ergäbe bei 7,5 h nicht exakt 7,5 h). */
+      const currentPct = Math.round((parseHoursInput(input.value) / total) * 100);
+      const nextPct = Math.max(0, currentPct + Number(btn.dataset.pct));
+      input.value = minutesToHoursInput(Math.round((total * nextPct) / 100));
+      onChange();
+    });
+  });
+}
+
 function computeTotalMinutes(start, end, pauseStart, pauseEnd) {
   const s = timeToMin(start), e = timeToMin(end);
   if (s === null || e === null) return 0;
@@ -270,7 +317,7 @@ let flow = { mode: null, editingId: null, draft: null }; // shared draft used by
    real credentials; otherwise the app stays purely local, exactly
    as before).
    ========================================================= */
-const APP_VERSION = "v15 (Projekt & Lab)";
+const APP_VERSION = "v17 (Dezimalstunden)";
 
 const SB = (window.SUPABASE_CONFIG && window.SUPABASE_CONFIG.url && window.SUPABASE_CONFIG.anonKey)
   ? supabase.createClient(window.SUPABASE_CONFIG.url, window.SUPABASE_CONFIG.anonKey, {
@@ -1184,20 +1231,17 @@ function openAllocSheet() {
     rowsEl.innerHTML = costCenters.map((cc) => {
       const existing = (flow.draft.allocations || []).find((a) => a.costCenterId === cc.id);
       const color = CC_PALETTE[cc.colorIndex % CC_PALETTE.length];
-      return `
-        <div class="alloc-row">
-          <span class="alloc-swatch" style="background:${color};"></span>
-          <span class="alloc-name">${escapeHtml(cc.code)} — ${escapeHtml(cc.name)}</span>
-          <div class="alloc-input">
-            <input type="time" data-cc-id="${cc.id}" value="${existing ? minutesToHHMM(existing.minutes) : ""}" />
-          </div>
-          <span class="alloc-unit"></span>
-        </div>`;
+      return allocRowHTML({
+        color,
+        label: `${escapeHtml(cc.code)} — ${escapeHtml(cc.name)}`,
+        attr: "data-cc-id",
+        id: cc.id,
+        value: existing ? minutesToHoursInput(existing.minutes) : "",
+      });
     }).join("");
-    rowsEl.querySelectorAll("input").forEach((inp) => inp.addEventListener("input", () => {
-      updateAllocRemainingHint();
-      renderAllocProjectRows();
-    }));
+    const onCcChange = () => { updateAllocRemainingHint(); renderAllocProjectRows(); };
+    rowsEl.querySelectorAll("input").forEach((inp) => inp.addEventListener("input", onCcChange));
+    wirePercentButtons(rowsEl, onCcChange);
   }
 
   renderAllocLabRows();
@@ -1212,7 +1256,7 @@ function closeAllocSheet() { hideBackdrop("sheet-alloc-backdrop"); }
 function readAllocRows() {
   const rows = [];
   document.querySelectorAll("#alloc-costcenter-rows input[data-cc-id]").forEach((inp) => {
-    const minutes = parseHHMM(inp.value);
+    const minutes = parseHoursInput(inp.value);
     if (minutes > 0) rows.push({ costCenterId: inp.dataset.ccId, minutes });
   });
   return rows;
@@ -1221,7 +1265,7 @@ function readAllocRows() {
 function readProjectAllocRows() {
   const rows = [];
   document.querySelectorAll("#alloc-project-rows input[data-project-id]").forEach((inp) => {
-    const minutes = parseHHMM(inp.value);
+    const minutes = parseHoursInput(inp.value);
     if (minutes > 0) {
       const actInput = document.querySelector(`#alloc-project-rows input[data-project-activity="${inp.dataset.projectId}"]`);
       rows.push({
@@ -1272,7 +1316,7 @@ function renderAllocProjectRows() {
 
   const ccMinutes = {};
   document.querySelectorAll("#alloc-costcenter-rows input[data-cc-id]").forEach((inp) => {
-    ccMinutes[inp.dataset.ccId] = parseHHMM(inp.value);
+    ccMinutes[inp.dataset.ccId] = parseHoursInput(inp.value);
   });
 
   const savedProjectCcIds = new Set(
@@ -1307,20 +1351,21 @@ function renderAllocProjectRows() {
   container.innerHTML = groups.map(({ cc, list }) => {
     const rowsHtml = list.map((pr) => {
       const existing = (flow.draft.projectAllocations || []).find((a) => a.projectId === pr.id);
-      const value = typedValues[pr.id] !== undefined ? typedValues[pr.id] : (existing ? minutesToHHMM(existing.minutes) : "");
+      const value = typedValues[pr.id] !== undefined
+        ? typedValues[pr.id]
+        : (existing ? minutesToHoursInput(existing.minutes) : "");
       const activity = typedActivities[pr.id] !== undefined
         ? typedActivities[pr.id]
         : (existing ? (existing.activity || "") : "");
       const color = PROJECT_PALETTE[pr.colorIndex % PROJECT_PALETTE.length];
-      return `
-        <div class="alloc-row">
-          <span class="alloc-swatch" style="background:${color};"></span>
-          <span class="alloc-name">${escapeHtml(pr.code)} — ${escapeHtml(pr.name)}</span>
-          <div class="alloc-input">
-            <input type="time" data-project-id="${pr.id}" data-parent-cc="${cc.id}" value="${value}" />
-          </div>
-          <span class="alloc-unit"></span>
-        </div>
+      return allocRowHTML({
+        color,
+        label: `${escapeHtml(pr.code)} — ${escapeHtml(pr.name)}`,
+        attr: "data-project-id",
+        id: pr.id,
+        value,
+        extraAttr: `data-parent-cc="${cc.id}"`,
+      }) + `
         <div class="alloc-activity">
           <input type="text" data-project-activity="${pr.id}"
             placeholder="Tätigkeit für ${escapeHtml(pr.code)} …" value="${escapeHtml(activity)}" />
@@ -1334,20 +1379,22 @@ function renderAllocProjectRows() {
       ${rowsHtml}`;
   }).join("");
 
-  container.querySelectorAll("input[data-project-id]").forEach((inp) => inp.addEventListener("input", updateAllocGroupHints));
+  container.querySelectorAll("input[data-project-id]").forEach((inp) =>
+    inp.addEventListener("input", updateAllocGroupHints));
+  wirePercentButtons(container, updateAllocGroupHints);
   updateAllocGroupHints();
 }
 
 function updateAllocGroupHints() {
   const ccMinutes = {};
   document.querySelectorAll("#alloc-costcenter-rows input[data-cc-id]").forEach((inp) => {
-    ccMinutes[inp.dataset.ccId] = parseHHMM(inp.value);
+    ccMinutes[inp.dataset.ccId] = parseHoursInput(inp.value);
   });
   document.querySelectorAll("#alloc-project-rows [data-group-hint]").forEach((label) => {
     const ccId = label.dataset.groupHint;
     const ccTotal = ccMinutes[ccId] || 0;
     const allocated = Array.from(document.querySelectorAll(`#alloc-project-rows input[data-parent-cc="${ccId}"]`))
-      .reduce((s, inp) => s + parseHHMM(inp.value), 0);
+      .reduce((s, inp) => s + parseHoursInput(inp.value), 0);
     const remaining = ccTotal - allocated;
     const span = label.querySelector(".hint-inline");
     if (allocated === 0) {
@@ -1571,26 +1618,25 @@ function renderAllocLabRows() {
   container.innerHTML = labs.map((lab) => {
     const existing = (flow.draft.laborAllocations || []).find((a) => a.labId === lab.id);
     const color = LAB_PALETTE[lab.colorIndex % LAB_PALETTE.length];
-    return `
-      <div class="alloc-row">
-        <span class="alloc-swatch" style="background:${color};"></span>
-        <span class="alloc-name">${escapeHtml(lab.code)} — ${escapeHtml(lab.name)}</span>
-        <div class="alloc-input">
-          <input type="time" data-lab-id="${lab.id}" value="${existing ? minutesToHHMM(existing.minutes) : ""}" />
-        </div>
-        <span class="alloc-unit"></span>
-      </div>`;
+    return allocRowHTML({
+      color,
+      label: `${escapeHtml(lab.code)} — ${escapeHtml(lab.name)}`,
+      attr: "data-lab-id",
+      id: lab.id,
+      value: existing ? minutesToHoursInput(existing.minutes) : "",
+    });
   }).join("");
 
   container.querySelectorAll("input[data-lab-id]").forEach((inp) =>
     inp.addEventListener("input", updateLabTotalHint));
+  wirePercentButtons(container, updateLabTotalHint);
   updateLabTotalHint();
 }
 
 function readLabAllocRows() {
   const rows = [];
   document.querySelectorAll("#alloc-lab-rows input[data-lab-id]").forEach((inp) => {
-    const minutes = parseHHMM(inp.value);
+    const minutes = parseHoursInput(inp.value);
     if (minutes > 0) rows.push({ labId: inp.dataset.labId, minutes });
   });
   return rows;
