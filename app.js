@@ -270,7 +270,7 @@ let flow = { mode: null, editingId: null, draft: null }; // shared draft used by
    real credentials; otherwise the app stays purely local, exactly
    as before).
    ========================================================= */
-const APP_VERSION = "v12 (Sync-Fix)";
+const APP_VERSION = "v14 (Datenverlust-Fix)";
 
 const SB = (window.SUPABASE_CONFIG && window.SUPABASE_CONFIG.url && window.SUPABASE_CONFIG.anonKey)
   ? supabase.createClient(window.SUPABASE_CONFIG.url, window.SUPABASE_CONFIG.anonKey, {
@@ -416,24 +416,73 @@ const pushProfileDebounced = debounce(async (p) => {
 
 async function bulkReplaceRemote() {
   if (!SB || !currentUser) return;
-  await SB.from("entries").delete().eq("user_id", currentUser.id);
-  await SB.from("cost_centers").delete().eq("user_id", currentUser.id);
-  await SB.from("projects").delete().eq("user_id", currentUser.id);
-  await SB.from("vacations").delete().eq("user_id", currentUser.id);
-  await SB.from("labs").delete().eq("user_id", currentUser.id);
-  if (costCenters.length) await SB.from("cost_centers").insert(costCenters.map(costCenterToRow));
-  if (projects.length) await SB.from("projects").insert(projects.map(projectToRow));
+  const check = (label, res) => {
+    if (res && res.error) { reportSyncError(label, res.error); throw res.error; }
+    return res;
+  };
+  check("Einträge löschen", await SB.from("entries").delete().eq("user_id", currentUser.id));
+  check("Kostenstellen löschen", await SB.from("cost_centers").delete().eq("user_id", currentUser.id));
+  check("Projekte löschen", await SB.from("projects").delete().eq("user_id", currentUser.id));
+  check("Urlaub löschen", await SB.from("vacations").delete().eq("user_id", currentUser.id));
+  check("Labore löschen", await SB.from("labs").delete().eq("user_id", currentUser.id));
+  if (costCenters.length) check("Kostenstellen speichern", await SB.from("cost_centers").insert(costCenters.map(costCenterToRow)));
+  if (projects.length) check("Projekte speichern", await SB.from("projects").insert(projects.map(projectToRow)));
   if (labs.length) {
-    await SB.from("labs").insert(labs.map((l) => ({
+    check("Labore speichern", await SB.from("labs").insert(labs.map((l) => ({
       id: l.id, user_id: currentUser.id, code: l.code, name: l.name, color_index: l.colorIndex,
-    })));
+    }))));
   }
-  if (entries.length) await SB.from("entries").insert(entries.map(entryToRow));
+  if (entries.length) check("Einträge speichern", await SB.from("entries").insert(entries.map(entryToRow)));
   if (vacations.length) {
-    await SB.from("vacations").insert(vacations.map((v) => ({
+    check("Urlaub speichern", await SB.from("vacations").insert(vacations.map((v) => ({
       id: v.id, user_id: currentUser.id, start_date: v.startDate, end_date: v.endDate,
-    })));
+    }))));
   }
+}
+
+/* Prüft die Verbindung Schritt für Schritt und liefert einen lesbaren Bericht.
+   Damit lässt sich ohne Entwicklerwerkzeuge feststellen, wo es klemmt. */
+async function runDiagnostics() {
+  const lines = [];
+  lines.push(`App-Version: ${APP_VERSION}`);
+  if (!SB) {
+    lines.push("FEHLER: Supabase ist nicht konfiguriert (config.js leer oder nicht geladen).");
+    return lines.join("\n");
+  }
+  try {
+    lines.push(`Projekt: ${new URL(window.SUPABASE_CONFIG.url).host}`);
+  } catch {
+    lines.push(`FEHLER: URL ungültig: "${window.SUPABASE_CONFIG.url}"`);
+  }
+  const { data: { session } } = await SB.auth.getSession();
+  if (!session) { lines.push("FEHLER: Nicht angemeldet."); return lines.join("\n"); }
+  lines.push(`Angemeldet: ${session.user.email}`);
+  lines.push(`Benutzer-ID: ${session.user.id}`);
+
+  const tables = ["cost_centers", "projects", "labs", "entries", "vacations", "settings"];
+  for (const t of tables) {
+    const res = await SB.from(t).select("*", { count: "exact", head: true });
+    if (res.error) lines.push(`Tabelle ${t}: FEHLER – ${res.error.message}`);
+    else lines.push(`Tabelle ${t}: OK (${res.count ?? 0} Zeilen)`);
+  }
+
+  // Schreibtest: anlegen, wieder lesen, wieder löschen
+  const testId = uid();
+  const ins = await SB.from("cost_centers").insert({
+    id: testId, user_id: session.user.id, code: "TEST", name: "Diagnose", color_index: 0,
+  });
+  if (ins.error) {
+    lines.push(`Schreibtest: FEHLGESCHLAGEN – ${ins.error.message}`);
+    if (ins.error.hint) lines.push(`Hinweis: ${ins.error.hint}`);
+  } else {
+    const back = await SB.from("cost_centers").select("*").eq("id", testId).maybeSingle();
+    lines.push(back.data ? "Schreibtest: OK (gespeichert und wieder gelesen)"
+                         : "Schreibtest: geschrieben, aber nicht lesbar (RLS-Regel prüfen)");
+    await SB.from("cost_centers").delete().eq("id", testId);
+  }
+  lines.push(`Lokal gespeichert: ${costCenters.length} Kostenstellen, ${projects.length} Projekte, ${labs.length} Labore, ${entries.length} Einträge`);
+  lines.push(`Offene Sync-Vorgänge: ${pendingRetries.length}`);
+  return lines.join("\n");
 }
 
 async function fetchAllFromSupabase() {
@@ -454,24 +503,33 @@ async function fetchAllFromSupabase() {
     return; // Bei Fehlern NICHT die lokalen Daten überschreiben.
   }
 
-  // Ist die Datenbank leer, aber lokal liegen Daten (z. B. vor dem ersten Login erfasst,
-  // oder nach der ID-Migration), dann laden wir sie hoch statt sie zu löschen.
-  const remoteEmpty = !ccRes.data.length && !prRes.data.length && !laRes.data.length
-    && !enRes.data.length && !vaRes.data.length;
-  const localHasData = costCenters.length || projects.length || labs.length
-    || entries.length || vacations.length;
-  if (remoteEmpty && localHasData) {
-    await bulkReplaceRemote();
-    return;
-  }
+  /* Wichtig: Der Schutz muss PRO TABELLE greifen. Prüft man nur "ist alles leer?",
+     löscht eine einzelne leere Tabelle die lokalen Daten, sobald irgendeine andere
+     Tabelle Inhalt hat – genau das ist vorher passiert (auch bei offener Seite,
+     ausgelöst durch Realtime-Ereignisse). */
+  let needsUpload = false;
+  const adopt = (remoteRows, localList, mapFn, saveFn) => {
+    if (remoteRows.length === 0 && localList.length > 0) {
+      needsUpload = true;      // lokal vorhanden, serverseitig nicht -> hochladen
+      return localList;        // lokale Daten behalten
+    }
+    const mapped = remoteRows.map(mapFn);
+    saveFn(mapped);
+    return mapped;
+  };
 
-  costCenters = ccRes.data.map(rowToCostCenter); saveCostCenters(costCenters);
-  projects = prRes.data.map(rowToProject); saveProjects(projects);
-  labs = laRes.data.map((r) => ({ id: r.id, code: r.code, name: r.name, colorIndex: r.color_index }));
-  saveLabs(labs);
-  entries = enRes.data.map(rowToEntry); saveEntries(entries);
-  vacations = vaRes.data.map((r) => ({ id: r.id, startDate: r.start_date, endDate: r.end_date }));
-  saveVacations(vacations);
+  costCenters = adopt(ccRes.data, costCenters, rowToCostCenter, saveCostCenters);
+  projects = adopt(prRes.data, projects, rowToProject, saveProjects);
+  labs = adopt(laRes.data, labs,
+    (r) => ({ id: r.id, code: r.code, name: r.name, colorIndex: r.color_index }), saveLabs);
+  entries = adopt(enRes.data, entries, rowToEntry, saveEntries);
+  vacations = adopt(vaRes.data, vacations,
+    (r) => ({ id: r.id, startDate: r.start_date, endDate: r.end_date }), saveVacations);
+
+  if (needsUpload) {
+    try { await bulkReplaceRemote(); }
+    catch (err) { reportSyncError("Datenübernahme", err); }
+  }
 
   if (stRes.data) {
     profile = {
@@ -554,6 +612,68 @@ async function onLoggedIn() {
   subscribeRealtime();
 }
 
+/* Prüft Schritt für Schritt, wo das Speichern scheitert, und zeigt die Original-Fehler an. */
+async function runDiagnostics() {
+  const out = document.getElementById("diagnose-output");
+  const lines = [];
+  const log = (s) => { lines.push(s); out.textContent = lines.join("\n"); };
+  out.style.display = "block";
+  out.textContent = "Teste …";
+
+  log(`App-Version: ${APP_VERSION}`);
+
+  if (!SB) {
+    log("✗ Supabase ist NICHT konfiguriert (config.js leer oder nicht geladen).");
+    log("→ url und anonKey in config.js eintragen, dann hart neu laden.");
+    return;
+  }
+  log(`✓ Supabase konfiguriert: ${window.SUPABASE_CONFIG.url}`);
+
+  const { data: sess } = await SB.auth.getSession();
+  if (!sess || !sess.session) { log("✗ Nicht angemeldet."); return; }
+  log(`✓ Angemeldet als ${sess.session.user.email}`);
+  log(`  user_id: ${sess.session.user.id}`);
+
+  const tables = ["cost_centers", "projects", "labs", "entries", "vacations", "settings"];
+  log("\n--- Tabellen lesen ---");
+  const missing = [];
+  for (const t of tables) {
+    const { error, count } = await SB.from(t).select("*", { count: "exact", head: true });
+    if (error) { log(`✗ ${t}: ${error.message}`); missing.push(t); }
+    else log(`✓ ${t}: ${count} Zeile(n)`);
+  }
+  if (missing.length) {
+    log(`\n→ Diese Tabellen fehlen oder sind gesperrt: ${missing.join(", ")}`);
+    log("→ supabase-schema.sql im Supabase SQL Editor ausführen.");
+  }
+
+  log("\n--- Schreibtest (Kostenstelle) ---");
+  const testId = uid();
+  log(`Test-ID: ${testId}`);
+  const insRes = await SB.from("cost_centers").insert({
+    id: testId, user_id: sess.session.user.id,
+    code: "TEST", name: "Diagnose-Test", color_index: 0,
+  });
+  if (insRes.error) {
+    log(`✗ Schreiben fehlgeschlagen: ${insRes.error.message}`);
+    if (insRes.error.details) log(`  Details: ${insRes.error.details}`);
+    if (insRes.error.hint) log(`  Hinweis: ${insRes.error.hint}`);
+    if (insRes.error.code) log(`  Code: ${insRes.error.code}`);
+  } else {
+    log("✓ Schreiben erfolgreich");
+    const back = await SB.from("cost_centers").select("*").eq("id", testId).maybeSingle();
+    log(back.data ? "✓ Zurücklesen erfolgreich" : `✗ Zurücklesen fehlgeschlagen: ${back.error && back.error.message}`);
+    const del = await SB.from("cost_centers").delete().eq("id", testId);
+    log(del.error ? `✗ Aufräumen fehlgeschlagen: ${del.error.message}` : "✓ Testzeile wieder gelöscht");
+  }
+
+  log("\n--- Lokale Daten ---");
+  log(`Kostenstellen: ${costCenters.length}, Projekte: ${projects.length}, Labore: ${labs.length}`);
+  log(`Einträge: ${entries.length}, Urlaube: ${vacations.length}`);
+  log(`Offene Sync-Vorgänge: ${pendingRetries.length}`);
+  log("\nFertig. Bitte diesen Text kopieren und schicken.");
+}
+
 function showAuthError(msg) {
   const el = document.getElementById("auth-error");
   el.textContent = msg; el.style.display = "block";
@@ -624,7 +744,6 @@ function wireAuthEvents() {
       : "Alles synchronisiert.";
     showBackdrop("sheet-account-backdrop");
   });
-  document.getElementById("btn-account-close").addEventListener("click", () => hideBackdrop("sheet-account-backdrop"));
   document.getElementById("btn-logout").addEventListener("click", async () => {
     if (!confirm("Wirklich abmelden?")) return;
     if (realtimeChannel) { SB.removeChannel(realtimeChannel); realtimeChannel = null; }
@@ -2225,6 +2344,14 @@ function wireEvents() {
   document.getElementById("sheet-alloc-backdrop").addEventListener("click", (ev) => {
     if (ev.target.id === "sheet-alloc-backdrop") closeAllocSheet();
   });
+  document.getElementById("btn-account-close").addEventListener("click", () => hideBackdrop("sheet-account-backdrop"));
+  document.getElementById("btn-diagnose").addEventListener("click", () => {
+    runDiagnostics().catch((err) => {
+      const out = document.getElementById("diagnose-output");
+      out.style.display = "block";
+      out.textContent = "Diagnose-Fehler: " + (err && err.message ? err.message : String(err));
+    });
+  });
   document.getElementById("sheet-account-backdrop").addEventListener("click", (ev) => {
     if (ev.target.id === "sheet-account-backdrop") hideBackdrop("sheet-account-backdrop");
   });
@@ -2251,6 +2378,16 @@ document.addEventListener("DOMContentLoaded", () => {
     initAuth();
   } else {
     document.getElementById("app-shell").style.display = "";
+    const accountBtn = document.getElementById("btn-account");
+    accountBtn.style.display = "flex";
+    accountBtn.addEventListener("click", () => {
+      document.getElementById("account-email").textContent = "Nicht angemeldet (lokaler Modus)";
+      document.getElementById("account-sync-status").textContent =
+        "Keine Synchronisierung – config.js enthält keine Supabase-Zugangsdaten.";
+      document.getElementById("account-version").textContent = `App ${APP_VERSION} · lokaler Modus`;
+      document.getElementById("btn-logout").style.display = "none";
+      showBackdrop("sheet-account-backdrop");
+    });
     init();
   }
 });
