@@ -426,6 +426,10 @@ button, input, select, textarea { font-family: inherit; }
   padding: 8px 10px; font-size: 13.5px; background: var(--surface); color: var(--text);
 }
 .alloc-activity input::placeholder { color: var(--text-faint); }
+.alloc-activity select {
+  width: 100%; border: 1px solid var(--border); border-radius: 8px;
+  padding: 8px 10px; font-size: 13.5px; background: var(--surface); color: var(--text);
+}
 .tab-btn.active { color: var(--ink); }
 .tab-btn.active .ic { color: var(--brass); }
 

@@ -347,7 +347,7 @@ let flow = { mode: null, editingId: null, draft: null }; // shared draft used by
    real credentials; otherwise the app stays purely local, exactly
    as before).
    ========================================================= */
-const APP_VERSION = "v25 (Ladeschutz)";
+const APP_VERSION = "v26 (Labor je Projekt)";
 
 const SB = (window.SUPABASE_CONFIG && window.SUPABASE_CONFIG.url && window.SUPABASE_CONFIG.anonKey)
   ? supabase.createClient(window.SUPABASE_CONFIG.url, window.SUPABASE_CONFIG.anonKey, {
@@ -1338,7 +1338,11 @@ function openAllocSheet() {
         value: existing ? minutesToHoursInput(existing.minutes) : "",
       });
     }).join("");
-    const onCcChange = () => { updateAllocRemainingHint(); renderAllocProjectRows(); };
+    const onCcChange = () => {
+      updateAllocRemainingHint();
+      renderAllocProjectRows();
+      renderAllocLabRows();
+    };
     rowsEl.querySelectorAll("input").forEach((inp) => inp.addEventListener("input", onCcChange));
     wirePercentButtons(rowsEl, onCcChange);
   }
@@ -1714,20 +1718,34 @@ function renderAllocLabRows() {
   }
   noLabHint.style.display = "none";
 
+  /* Projekte, denen Laborzeit zugeordnet werden kann: alle, deren Kostenstelle
+     in diesem Eintrag Zeit bekommen hat. */
+  const ccWithTime = readAllocRows().map((a) => a.costCenterId);
+  const selectable = projects.filter((p) => ccWithTime.includes(p.costCenterId));
+
   container.innerHTML = labs.map((lab) => {
     const existing = (flow.draft.laborAllocations || []).find((a) => a.labId === lab.id);
     const color = LAB_PALETTE[lab.colorIndex % LAB_PALETTE.length];
+    const options = [`<option value="">— ohne Projekt —</option>`]
+      .concat(selectable.map((p) =>
+        `<option value="${p.id}" ${existing && existing.projectId === p.id ? "selected" : ""}>${escapeHtml(p.code)}</option>`))
+      .join("");
     return allocRowHTML({
       color,
       label: `${escapeHtml(lab.code)} — ${escapeHtml(lab.name)}`,
       attr: "data-lab-id",
       id: lab.id,
       value: existing ? minutesToHoursInput(existing.minutes) : "",
-    });
+    }) + `
+      <div class="alloc-activity">
+        <select data-lab-project="${lab.id}">${options}</select>
+      </div>`;
   }).join("");
 
   container.querySelectorAll("input[data-lab-id]").forEach((inp) =>
     inp.addEventListener("input", updateLabTotalHint));
+  container.querySelectorAll("select[data-lab-project]").forEach((sel) =>
+    sel.addEventListener("change", updateLabTotalHint));
   wirePercentButtons(container, updateLabTotalHint);
   updateLabTotalHint();
 }
@@ -1736,7 +1754,14 @@ function readLabAllocRows() {
   const rows = [];
   document.querySelectorAll("#alloc-lab-rows input[data-lab-id]").forEach((inp) => {
     const minutes = parseHoursInput(inp.value);
-    if (minutes > 0) rows.push({ labId: inp.dataset.labId, minutes });
+    if (minutes > 0) {
+      const sel = document.querySelector(`#alloc-lab-rows select[data-lab-project="${inp.dataset.labId}"]`);
+      rows.push({
+        labId: inp.dataset.labId,
+        minutes,
+        projectId: sel && sel.value ? sel.value : null,
+      });
+    }
   });
   return rows;
 }
@@ -2324,15 +2349,23 @@ function buildBlockSheet(titleLabel, relevantEntries, generalHoursFn, projectHou
   const noneRows = [];
   const projectRowsMap = new Map();
 
+  /* Laborzeit gehört jeweils zu EINEM Projekt (beim Erfassen zugeordnet).
+     Vorher wurde die Gesamtsumme in jeden Projekt-Block geschrieben – das war falsch. */
+  const laborFor = (e, projectId) => {
+    const mins = (e.laborAllocations || [])
+      .filter((a) => (a.projectId || null) === (projectId || null))
+      .reduce((sum, a) => sum + a.minutes, 0);
+    return mins ? Number((mins / 60).toFixed(2)) : "";
+  };
+
   relevantEntries.forEach((e) => {
-    const laborH = e.laborMinutes ? Number((e.laborMinutes / 60).toFixed(2)) : "";
     const projAllocs = e.projectAllocations || [];
     if (projAllocs.length === 0) {
-      noneRows.push([fmtDatePlain(e.date), generalHoursFn(e), laborH, ""]);
+      noneRows.push([fmtDatePlain(e.date), generalHoursFn(e), laborFor(e, null), ""]);
     } else {
       projAllocs.forEach((pa) => {
         const arr = projectRowsMap.get(pa.projectId) || [];
-        arr.push([fmtDatePlain(e.date), projectHoursFn(e, pa), laborH, pa.activity || ""]);
+        arr.push([fmtDatePlain(e.date), projectHoursFn(e, pa), laborFor(e, pa.projectId), pa.activity || ""]);
         projectRowsMap.set(pa.projectId, arr);
       });
     }
@@ -2506,7 +2539,12 @@ function buildWorkbook() {
       .map((e) => {
         const alloc = (e.laborAllocations || []).find((a) => a.labId === lab.id);
         if (!alloc) return null;
-        return [fmtDatePlain(e.date), Number((alloc.minutes / 60).toFixed(2)), entryActivitySummary(e)];
+        const pr = alloc.projectId ? projects.find((p) => p.id === alloc.projectId) : null;
+        const desc = pr
+          ? `${pr.code}${(e.projectAllocations || []).find((a) => a.projectId === pr.id)?.activity
+              ? " — " + (e.projectAllocations || []).find((a) => a.projectId === pr.id).activity : ""}`
+          : entryActivitySummary(e);
+        return [fmtDatePlain(e.date), Number((alloc.minutes / 60).toFixed(2)), desc];
       })
       .filter(Boolean);
     return {
