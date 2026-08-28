@@ -347,7 +347,7 @@ let flow = { mode: null, editingId: null, draft: null }; // shared draft used by
    real credentials; otherwise the app stays purely local, exactly
    as before).
    ========================================================= */
-const APP_VERSION = "v27 (Labor je Projekt aufteilbar)";
+const APP_VERSION = "v28 (Labor-Matrix)";
 
 const SB = (window.SUPABASE_CONFIG && window.SUPABASE_CONFIG.url && window.SUPABASE_CONFIG.anonKey)
   ? supabase.createClient(window.SUPABASE_CONFIG.url, window.SUPABASE_CONFIG.anonKey, {
@@ -752,6 +752,7 @@ async function onLoggedIn() {
       reportSyncError("Datenübernahme", err);
     }
   }
+  ensureGeneralProjects();
   if (!appInitialized) { init(); appInitialized = true; }
   else { renderAll(); renderTimer(); renderTopbarDate(); }
   subscribeRealtime();
@@ -1341,13 +1342,10 @@ function openAllocSheet() {
     const onCcChange = () => {
       updateAllocRemainingHint();
       renderAllocProjectRows();
-      renderAllocLabRows();
     };
     rowsEl.querySelectorAll("input").forEach((inp) => inp.addEventListener("input", onCcChange));
     wirePercentButtons(rowsEl, onCcChange);
   }
-
-  renderAllocLabRows();
 
   updateAllocRemainingHint();
   renderAllocProjectRows();
@@ -1662,8 +1660,31 @@ function addCostCenter(code, name) {
   const cc = { id: uid(), code: code.toUpperCase(), name, colorIndex: costCenters.length };
   costCenters.push(cc);
   saveCostCenters(costCenters);
-  renderCostCenters();
   pushCostCenter(cc);
+  // Jede Kostenstelle bekommt automatisch ein Projekt "Allgemein" – dorthin läuft alles,
+  // was keinem konkreten Projekt zuzuordnen ist (auch Laborzeit).
+  addProject("ALLG", "Allgemein", cc.id);
+  renderCostCenters();
+}
+
+/* Ergänzt fehlende "Allgemein"-Projekte bei bereits bestehenden Kostenstellen. */
+function ensureGeneralProjects() {
+  let added = false;
+  costCenters.forEach((cc) => {
+    const hasGeneral = projects.some((p) => p.costCenterId === cc.id && p.code === "ALLG");
+    if (!hasGeneral) {
+      projects.push({
+        id: uid(), code: "ALLG", name: "Allgemein",
+        costCenterId: cc.id, colorIndex: projects.length,
+      });
+      added = true;
+    }
+  });
+  if (added) {
+    saveProjects(projects);
+    projects.filter((p) => p.code === "ALLG").forEach((p) => pushProject(p));
+  }
+  return added;
 }
 
 /* =========================================================
@@ -1759,68 +1780,6 @@ function addProject(code, name, costCenterId) {
   saveProjects(projects);
   renderProjects();
   pushProject(pr);
-}
-
-/* Laborzeit wird auf die selbst angelegten Labore aufgeteilt. */
-function renderAllocLabRows() {
-  const container = document.getElementById("alloc-lab-rows");
-  const noLabHint = document.getElementById("alloc-no-lab");
-  const totalHint = document.getElementById("alloc-lab-total-hint");
-
-  if (labs.length === 0) {
-    container.innerHTML = "";
-    noLabHint.style.display = "block";
-    totalHint.textContent = "";
-    return;
-  }
-  noLabHint.style.display = "none";
-
-  container.innerHTML = labs.map((lab) => {
-    const existing = (flow.draft.laborAllocations || [])
-      .find((a) => a.labId === lab.id && !a.projectId);
-    const color = LAB_PALETTE[lab.colorIndex % LAB_PALETTE.length];
-    return allocRowHTML({
-      color,
-      label: `${escapeHtml(lab.code)} — ${escapeHtml(lab.name)}`,
-      attr: "data-lab-id",
-      id: lab.id,
-      value: existing ? minutesToHoursInput(existing.minutes) : "",
-    });
-  }).join("");
-
-  container.querySelectorAll("input[data-lab-id]").forEach((inp) =>
-    inp.addEventListener("input", updateLabTotalHint));
-  wirePercentButtons(container, updateLabTotalHint);
-  updateLabTotalHint();
-}
-
-function readLabAllocRows() {
-  const rows = [];
-  // Laborzeit steht jetzt unter dem jeweiligen Projekt: Paar aus Projekt und Labor.
-  document.querySelectorAll("#alloc-project-rows input[data-lab-of-project]").forEach((inp) => {
-    const minutes = parseHoursInput(inp.value);
-    if (minutes > 0) {
-      rows.push({
-        labId: inp.dataset.labId,
-        minutes,
-        projectId: inp.dataset.labOfProject,
-      });
-    }
-  });
-  // Laborzeit ohne Projektbezug (eigener Abschnitt weiter unten).
-  document.querySelectorAll("#alloc-lab-rows input[data-lab-id]").forEach((inp) => {
-    const minutes = parseHoursInput(inp.value);
-    if (minutes > 0) rows.push({ labId: inp.dataset.labId, minutes, projectId: null });
-  });
-  return rows;
-}
-
-function updateLabTotalHint() {
-  const hint = document.getElementById("alloc-lab-total-hint");
-  const total = readLabAllocRows().reduce((s, a) => s + a.minutes, 0);
-  if (total === 0) { hint.textContent = ""; hint.className = "hint"; return; }
-  hint.textContent = `Laborzeit gesamt: ${fmtHoursDecimal(total)} h`;
-  hint.className = "hint ok";
 }
 
 /* =========================================================
@@ -2629,12 +2588,67 @@ function buildWorkbook() {
     });
     labAoa.push(row);
   }
-  const wsLabor = XLSX.utils.aoa_to_sheet(labAoa);
-  wsLabor["!cols"] = labBlocks.flatMap((b, i) => {
-    const cols = [{ wch: 11 }, { wch: 7 }, { wch: 30 }];
-    if (i < labBlocks.length - 1) cols.push({ wch: 2 });
-    return cols;
+  /* Kreuztabelle ganz rechts: Zeilen = Projekte, Spalten = Labore.
+     Sie steht bewusst rechts von allen Labor-Blöcken, damit neue Labore links
+     davor eingefügt werden und die Tabelle ihre Position behält. */
+  const blockWidth = labBlocks.length * 3 + (labBlocks.length - 1); // 3 Spalten je Block + Trenner
+  const matrixStart = blockWidth + 1;                               // eine Leerspalte Abstand
+
+  const setCell = (rowIdx, colIdx, value) => {
+    while (labAoa.length <= rowIdx) labAoa.push([]);
+    const row = labAoa[rowIdx];
+    while (row.length < colIdx) row.push("");
+    row[colIdx] = value;
+  };
+
+  // Kopfzeile: Projektspalte + je Labor eine Spalte + Summe
+  setCell(1, matrixStart, "Projekt / Labor");
+  labs.forEach((lab, i) => setCell(1, matrixStart + 1 + i, lab.code));
+  setCell(1, matrixStart + 1 + labs.length, "Summe");
+
+  const minutesFor = (projectId, labId) =>
+    sorted.reduce((sum, e) => sum + (e.laborAllocations || [])
+      .filter((a) => a.labId === labId && (a.projectId || null) === projectId)
+      .reduce((s, a) => s + a.minutes, 0), 0);
+
+  const matrixProjects = projects.map((pr) => {
+    const cc = costCenters.find((c) => c.id === pr.costCenterId);
+    return { id: pr.id, label: cc ? `${cc.code} · ${pr.code}` : pr.code };
   });
+
+  const labTotals = labs.map(() => 0);
+  matrixProjects.forEach((pr, r) => {
+    const rowIdx = 2 + r;
+    setCell(rowIdx, matrixStart, pr.label);
+    let rowSum = 0;
+    labs.forEach((lab, c) => {
+      const h = Number((minutesFor(pr.id, lab.id) / 60).toFixed(2));
+      setCell(rowIdx, matrixStart + 1 + c, h || "");
+      rowSum += h;
+      labTotals[c] += h;
+    });
+    setCell(rowIdx, matrixStart + 1 + labs.length, rowSum ? Number(rowSum.toFixed(2)) : "");
+  });
+
+  const totalsRow = 2 + matrixProjects.length;
+  setCell(totalsRow, matrixStart, "Summe");
+  labs.forEach((lab, c) =>
+    setCell(totalsRow, matrixStart + 1 + c, labTotals[c] ? Number(labTotals[c].toFixed(2)) : ""));
+  setCell(totalsRow, matrixStart + 1 + labs.length,
+    Number(labTotals.reduce((a, b) => a + b, 0).toFixed(2)));
+
+  const wsLabor = XLSX.utils.aoa_to_sheet(labAoa);
+  wsLabor["!cols"] = [
+    ...labBlocks.flatMap((b, i) => {
+      const cols = [{ wch: 11 }, { wch: 7 }, { wch: 30 }];
+      if (i < labBlocks.length - 1) cols.push({ wch: 2 });
+      return cols;
+    }),
+    { wch: 2 },                              // Abstand
+    { wch: 20 },                             // Projektspalte
+    ...labs.map(() => ({ wch: 8 })),         // je Labor
+    { wch: 9 },                              // Summe
+  ];
   XLSX.utils.book_append_sheet(wb, wsLabor, sanitizeSheetName("Labor", usedNames));
 
   const filename = `Arbeitszeit_Export_${todayStr()}.xlsx`;
@@ -2949,6 +2963,7 @@ document.addEventListener("DOMContentLoaded", () => {
     initAuth();
   } else {
     hideBootScreen();
+    ensureGeneralProjects();
     document.getElementById("app-shell").style.display = "";
     const accountBtn = document.getElementById("btn-account");
     accountBtn.style.display = "flex";
