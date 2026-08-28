@@ -347,7 +347,7 @@ let flow = { mode: null, editingId: null, draft: null }; // shared draft used by
    real credentials; otherwise the app stays purely local, exactly
    as before).
    ========================================================= */
-const APP_VERSION = "v28 (Labor-Matrix)";
+const APP_VERSION = "v31 (Laborblock-Fix)";
 
 const SB = (window.SUPABASE_CONFIG && window.SUPABASE_CONFIG.url && window.SUPABASE_CONFIG.anonKey)
   ? supabase.createClient(window.SUPABASE_CONFIG.url, window.SUPABASE_CONFIG.anonKey, {
@@ -752,6 +752,7 @@ async function onLoggedIn() {
       reportSyncError("Datenübernahme", err);
     }
   }
+  dedupeGeneralProjects();
   ensureGeneralProjects();
   if (!appInitialized) { init(); appInitialized = true; }
   else { renderAll(); renderTimer(); renderTopbarDate(); }
@@ -1341,9 +1342,14 @@ function openAllocSheet() {
     }).join("");
     const onCcChange = () => {
       updateAllocRemainingHint();
-      renderAllocProjectRows();
+      renderAllocProjectRows();   // andere Kostenstelle -> andere Projektliste
     };
-    rowsEl.querySelectorAll("input").forEach((inp) => inp.addEventListener("input", onCcChange));
+    let ccDebounce = null;
+    rowsEl.querySelectorAll("input").forEach((inp) => inp.addEventListener("input", () => {
+      updateAllocRemainingHint();               // sofort, ohne Neuaufbau
+      clearTimeout(ccDebounce);                 // Neuaufbau erst nach kurzer Pause,
+      ccDebounce = setTimeout(onCcChange, 400); // damit das Tippen nicht stockt
+    }));
     wirePercentButtons(rowsEl, onCcChange);
   }
 
@@ -1476,8 +1482,8 @@ function renderAllocProjectRows() {
          unter dem jeweiligen Projekt – so lassen sich 5 h Labor beliebig aufteilen
          (z. B. 3 h auf Projekt A, 2 h auf Projekt B). */
       const hasHours = parseHoursInput(value) > 0;
-      const labFields = (hasHours && labs.length > 0) ? `
-        <div class="alloc-lab-sub">
+      const labFields = labs.length === 0 ? "" : `
+        <div class="alloc-lab-sub${hasHours ? "" : " is-hidden"}" data-lab-block="${pr.id}">
           <div class="alloc-lab-sub-title">davon im Labor</div>
           ${labs.map((lab) => {
             const key = `${pr.id}|${lab.id}`;
@@ -1497,7 +1503,7 @@ function renderAllocProjectRows() {
               </div>`;
           }).join("")}
           <div class="hint" data-lab-sum="${pr.id}"></div>
-        </div>` : "";
+        </div>`;
 
       return rowHtml + `
         <div class="alloc-activity">
@@ -1514,12 +1520,33 @@ function renderAllocProjectRows() {
   }).join("");
 
   container.querySelectorAll("input[data-project-id]").forEach((inp) =>
-    inp.addEventListener("input", () => { updateAllocGroupHints(); renderAllocProjectRows(); }));
+    inp.addEventListener("input", () => {
+      updateAllocGroupHints();
+      // Nur ein-/ausblenden statt neu aufzubauen – sonst verliert das Feld beim
+      // Tippen den Fokus und der zuletzt eingegebene Wert geht verloren.
+      toggleLabBlocks();
+      updateProjectLabSums();
+    }));
   container.querySelectorAll("input[data-lab-of-project]").forEach((inp) =>
     inp.addEventListener("input", updateProjectLabSums));
-  wirePercentButtons(container, updateAllocGroupHints);
+  wirePercentButtons(container, () => {
+    updateAllocGroupHints();
+    toggleLabBlocks();
+    updateProjectLabSums();
+  });
   updateAllocGroupHints();
+  toggleLabBlocks();
   updateProjectLabSums();
+}
+
+/* Blendet den Laborblock eines Projekts ein, sobald dieses Stunden hat. */
+function toggleLabBlocks() {
+  document.querySelectorAll("#alloc-project-rows [data-lab-block]").forEach((block) => {
+    const prId = block.dataset.labBlock;
+    const inp = document.querySelector(`#alloc-project-rows input[data-project-id="${prId}"]`);
+    const hasHours = inp ? parseHoursInput(inp.value) > 0 : false;
+    block.classList.toggle("is-hidden", !hasHours);
+  });
 }
 
 /* Zeigt je Projekt, wie viel der Projektzeit im Labor verbracht wurde. */
@@ -1668,10 +1695,47 @@ function addCostCenter(code, name) {
 }
 
 /* Ergänzt fehlende "Allgemein"-Projekte bei bereits bestehenden Kostenstellen. */
+function isGeneralProject(p) {
+  const code = (p.code || "").replace(/[^a-z]/gi, "").toUpperCase();
+  const name = (p.name || "").trim().toLowerCase();
+  return code === "ALLG" || code === "ALLGEMEIN" || name === "allgemein";
+}
+
+/* Entfernt doppelte "Allgemein"-Projekte je Kostenstelle, die durch unterschiedliche
+   Schreibweisen (z. B. "ALLG." vs. "ALLG") entstanden sind. Behalten wird das ältere;
+   bereits erfasste Zeiten werden auf dieses umgehängt, damit nichts verloren geht. */
+function dedupeGeneralProjects() {
+  let changed = false;
+  costCenters.forEach((cc) => {
+    const generals = projects.filter((p) => p.costCenterId === cc.id && isGeneralProject(p));
+    if (generals.length < 2) return;
+    const keep = generals[0];
+    generals.slice(1).forEach((dup) => {
+      entries.forEach((e) => {
+        (e.projectAllocations || []).forEach((a) => {
+          if (a.projectId === dup.id) a.projectId = keep.id;
+        });
+        (e.laborAllocations || []).forEach((a) => {
+          if (a.projectId === dup.id) a.projectId = keep.id;
+        });
+      });
+      projects = projects.filter((p) => p.id !== dup.id);
+      deleteProjectRemote(dup.id);
+      changed = true;
+    });
+  });
+  if (changed) {
+    saveProjects(projects);
+    saveEntries(entries);
+    entries.forEach((e) => pushEntry(e));
+  }
+  return changed;
+}
+
 function ensureGeneralProjects() {
   let added = false;
   costCenters.forEach((cc) => {
-    const hasGeneral = projects.some((p) => p.costCenterId === cc.id && p.code === "ALLG");
+    const hasGeneral = projects.some((p) => p.costCenterId === cc.id && isGeneralProject(p));
     if (!hasGeneral) {
       projects.push({
         id: uid(), code: "ALLG", name: "Allgemein",
@@ -1780,6 +1844,24 @@ function addProject(code, name, costCenterId) {
   saveProjects(projects);
   renderProjects();
   pushProject(pr);
+}
+
+/* Liest die Laborzeiten aus den Feldern, die unter dem jeweiligen Projekt stehen.
+   Schlüssel ist also das Paar Projekt + Labor – dadurch lassen sich die Stunden eines
+   Labors auf mehrere Projekte aufteilen. */
+function readLabAllocRows() {
+  const rows = [];
+  document.querySelectorAll("#alloc-project-rows input[data-lab-of-project]").forEach((inp) => {
+    const minutes = parseHoursInput(inp.value);
+    if (minutes > 0) {
+      rows.push({
+        labId: inp.dataset.labId,
+        minutes,
+        projectId: inp.dataset.labOfProject,
+      });
+    }
+  });
+  return rows;
 }
 
 /* =========================================================
@@ -2714,7 +2796,12 @@ function resetAll() {
 /* =========================================================
    Sheet show/hide helpers
    ========================================================= */
-function showBackdrop(id) { document.getElementById(id).classList.add("active"); }
+function showBackdrop(id) {
+  const el = document.getElementById(id);
+  el.classList.add("active");
+  const sheet = el.querySelector(".sheet");
+  if (sheet) sheet.scrollTop = 0;   // sonst öffnet ein Sheet mitten im Inhalt
+}
 function hideBackdrop(id) { document.getElementById(id).classList.remove("active"); }
 
 /* =========================================================
@@ -2772,11 +2859,16 @@ function wireEvents() {
   document.getElementById("btn-times-delete").addEventListener("click", deleteCurrentEntry);
 
   document.getElementById("btn-alloc-back").addEventListener("click", () => {
-    // keep whatever the user already typed so it isn't lost when going back
-    flow.draft.allocations = readAllocRows();
-    flow.draft.projectAllocations = readProjectAllocRows();
-    flow.draft.laborAllocations = readLabAllocRows();
-    flow.draft.laborMinutes = flow.draft.laborAllocations.reduce((sum, a) => sum + a.minutes, 0);
+    // Eingaben sichern – aber ein Fehler dabei darf die Navigation nicht blockieren.
+    try {
+      flow.draft.allocations = readAllocRows();
+      flow.draft.projectAllocations = readProjectAllocRows();
+      flow.draft.laborAllocations = readLabAllocRows();
+      flow.draft.laborMinutes = flow.draft.laborAllocations.reduce((sum, a) => sum + a.minutes, 0);
+    } catch (err) {
+      console.error("Zwischenspeichern beim Zurück fehlgeschlagen:", err);
+      toast("Eingaben konnten nicht übernommen werden.");
+    }
     closeAllocSheet();
     openTimesSheet(flow.mode, flow.draft);
   });
@@ -2963,6 +3055,7 @@ document.addEventListener("DOMContentLoaded", () => {
     initAuth();
   } else {
     hideBootScreen();
+    dedupeGeneralProjects();
     ensureGeneralProjects();
     document.getElementById("app-shell").style.display = "";
     const accountBtn = document.getElementById("btn-account");

@@ -427,6 +427,7 @@ button, input, select, textarea { font-family: inherit; }
 }
 .alloc-activity input::placeholder { color: var(--text-faint); }
 /* Laborfelder, eingerückt unter dem jeweiligen Projekt */
+.alloc-lab-sub.is-hidden { display: none; }
 .alloc-lab-sub {
   margin: -6px 0 14px 20px; padding: 10px 12px;
   background: var(--teal-light); border-radius: 10px;
