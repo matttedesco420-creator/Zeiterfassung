@@ -469,28 +469,42 @@ a { color: inherit; }
   font-size: 12px; color: var(--text-soft); margin-top: 3px;
 }
 
-/* ---------- Urlaubsanspruch pro Monat ---------- */
+/* ---------- Monatsübersicht: Arbeitszeit & Urlaub ---------- */
 .vac-table {
   background: var(--surface); border: 1px solid var(--border);
   border-radius: var(--radius); overflow: hidden;
 }
 .vac-row {
-  display: flex; align-items: center; gap: 8px;
-  padding: 9px 12px; border-bottom: 1px solid var(--border); font-size: 13px;
+  display: flex; align-items: center; gap: 4px;
+  padding: 8px 10px; border-bottom: 1px solid var(--border); font-size: 12.5px;
 }
 .vac-row:last-child { border-bottom: none; }
-.vac-head, .vac-total {
-  background: #fafafb; font-weight: 700; font-size: 11.5px;
-  text-transform: uppercase; letter-spacing: 0.03em; color: var(--text-soft);
+.vac-head {
+  background: #fafafb; font-weight: 700; font-size: 10px;
+  letter-spacing: 0.02em; color: var(--text-soft);
 }
-.vac-total { text-transform: none; font-size: 13px; color: var(--text); }
-.vac-month { flex: 0 0 34px; font-weight: 700; }
-.vac-contract {
-  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  color: var(--text-soft);
+.vac-total { background: #fafafb; font-weight: 700; }
+.vac-month {
+  flex: 1 1 auto; min-width: 0; font-weight: 700;
+  display: flex; flex-direction: column; line-height: 1.15;
 }
+.vac-month em {
+  font-style: normal; font-weight: 500; font-size: 10.5px; color: var(--text-faint);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.vac-head .vac-month, .vac-total .vac-month { display: block; }
 .vac-num {
-  flex: 0 0 62px; text-align: right;
-  font-family: var(--font-mono); font-variant-numeric: tabular-nums;
+  flex: 0 0 52px; text-align: right;
+  font-family: var(--font-mono); font-variant-numeric: tabular-nums; font-size: 11.5px;
 }
+.vac-head .vac-num { font-family: var(--font-sans); }
 .vac-num.used { color: var(--teal); font-weight: 600; }
+.vac-num.under { color: var(--teal); }
+.vac-num.over { color: var(--rust); font-weight: 600; }
+.legend-under { color: var(--teal); font-weight: 600; }
+.legend-over { color: var(--rust); font-weight: 600; }
+
+@media (max-width: 380px) {
+  .vac-num { flex: 0 0 46px; font-size: 10.5px; }
+  .vac-row { padding: 8px 7px; }
+}

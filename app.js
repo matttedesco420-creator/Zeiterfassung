@@ -347,7 +347,7 @@ let flow = { mode: null, editingId: null, draft: null }; // shared draft used by
    real credentials; otherwise the app stays purely local, exactly
    as before).
    ========================================================= */
-const APP_VERSION = "v21 (Urlaub in Stunden)";
+const APP_VERSION = "v23 (Arbeitszeit/Urlaub)";
 
 const SB = (window.SUPABASE_CONFIG && window.SUPABASE_CONFIG.url && window.SUPABASE_CONFIG.anonKey)
   ? supabase.createClient(window.SUPABASE_CONFIG.url, window.SUPABASE_CONFIG.anonKey, {
@@ -1858,8 +1858,8 @@ function addContract(name, weeklyHours, months) {
   renderContracts();
 }
 
-/* Urlaubsanspruch je Monat: Wochenstunden aus dem Vertrag x 5/12,
-   daneben der bereits genommene Urlaub aus den eingetragenen Zeiträumen. */
+/* Monatsübersicht: Arbeitsstunden (Soll/Ist) und Urlaub (Anspruch/genommen),
+   jeweils auf Basis des für den Monat hinterlegten Vertrags. */
 function renderVacationOverview() {
   const sel = document.getElementById("vac-overview-year");
   if (sel.options.length === 0 || sel.dataset.years !== contractYears().join(",")) {
@@ -1871,20 +1871,46 @@ function renderVacationOverview() {
   const year = Number(sel.value);
   const taken = vacationDateSet();
 
-  let sumSoll = 0, sumIst = 0;
+  let sumSoll = 0, sumIst = 0, sumVacSoll = 0, sumVacIst = 0;
   const rows = MONTHS_AT.map((m, i) => {
-    const soll = monthlyVacationHours(year, i);
+    const daily = dailyHoursForMonth(year, i);
     const prefix = `${year}-${String(i + 1).padStart(2, "0")}`;
-    const days = [...taken].filter((d) => d.startsWith(prefix)).length;
-    const ist = Number((days * dailyHoursForMonth(year, i)).toFixed(2));
-    sumSoll += soll; sumIst += ist;
+
+    // Soll = Werktage des Monats x Tagesstunden laut Vertrag
+    const daysInMonth = new Date(year, i + 1, 0).getDate();
+    let weekdays = 0;
+    for (let d = 1; d <= daysInMonth; d++) {
+      const dow = new Date(year, i, d).getDay();
+      if (dow !== 0 && dow !== 6) weekdays++;
+    }
+    const soll = Number((weekdays * daily).toFixed(2));
+
+    // Ist = tatsächlich erfasste Arbeitszeit dieses Monats
+    const istMin = entries
+      .filter((e) => e.date.startsWith(prefix))
+      .reduce((s, e) => s + e.totalMinutes, 0);
+    const ist = Number((istMin / 60).toFixed(2));
+
+    const vacSoll = monthlyVacationHours(year, i);
+    const vacDays = [...taken].filter((d) => d.startsWith(prefix)).length;
+    const vacIst = Number((vacDays * daily).toFixed(2));
+
+    sumSoll += soll; sumIst += ist; sumVacSoll += vacSoll; sumVacIst += vacIst;
+
     const contract = contracts.find((c) => (c.months || []).includes(prefix));
+    const diff = ist - soll;
+    const istClass = soll > 0 && Math.abs(diff) > 0.01 ? (diff > 0 ? "over" : "under") : "";
+
     return `
       <div class="vac-row">
-        <span class="vac-month">${m.short}</span>
-        <span class="vac-contract">${contract ? escapeHtml(contract.name) : "<i>kein Vertrag</i>"}</span>
-        <span class="vac-num">${fmtHoursDecimal(soll * 60)} h</span>
-        <span class="vac-num ${ist > 0 ? "used" : ""}">${fmtHoursDecimal(ist * 60)} h</span>
+        <span class="vac-month">
+          ${m.short}
+          <em>${contract ? escapeHtml(contract.name) : "kein Vertrag"}</em>
+        </span>
+        <span class="vac-num">${soll ? fmtHoursDecimal(soll * 60) : "–"}</span>
+        <span class="vac-num ${istClass}">${ist ? fmtHoursDecimal(ist * 60) : "–"}</span>
+        <span class="vac-num">${vacSoll ? fmtHoursDecimal(vacSoll * 60) : "–"}</span>
+        <span class="vac-num ${vacIst > 0 ? "used" : ""}">${vacIst ? fmtHoursDecimal(vacIst * 60) : "–"}</span>
       </div>`;
   }).join("");
 
@@ -1892,18 +1918,25 @@ function renderVacationOverview() {
     <div class="vac-table">
       <div class="vac-row vac-head">
         <span class="vac-month">Monat</span>
-        <span class="vac-contract">Vertrag</span>
-        <span class="vac-num">Anspruch</span>
-        <span class="vac-num">genommen</span>
+        <span class="vac-num">Soll</span>
+        <span class="vac-num">Ist</span>
+        <span class="vac-num">Url.&nbsp;Anspr.</span>
+        <span class="vac-num">Url.&nbsp;gen.</span>
       </div>
       ${rows}
       <div class="vac-row vac-total">
-        <span class="vac-month">Σ</span>
-        <span class="vac-contract">Jahr ${year}</span>
-        <span class="vac-num">${fmtHoursDecimal(sumSoll * 60)} h</span>
-        <span class="vac-num">${fmtHoursDecimal(sumIst * 60)} h</span>
+        <span class="vac-month">Σ ${year}</span>
+        <span class="vac-num">${fmtHoursDecimal(sumSoll * 60)}</span>
+        <span class="vac-num">${fmtHoursDecimal(sumIst * 60)}</span>
+        <span class="vac-num">${fmtHoursDecimal(sumVacSoll * 60)}</span>
+        <span class="vac-num">${fmtHoursDecimal(sumVacIst * 60)}</span>
       </div>
-    </div>`;
+    </div>
+    <p class="hint" style="margin-top:8px;">
+      Alle Werte in Stunden. Soll = Werktage × Tagesstunden laut Vertrag.
+      Ist = erfasste Arbeitszeit. <span class="legend-under">grün</span> = unter dem Soll,
+      <span class="legend-over">rot</span> = darüber.
+    </p>`;
 }
 
 /* =========================================================

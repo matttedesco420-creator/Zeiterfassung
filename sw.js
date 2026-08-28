@@ -1,5 +1,5 @@
 // Version bei jeder Änderung hochzählen.
-const CACHE_NAME = "arbeitszeit-tracker-v21";
+const CACHE_NAME = "arbeitszeit-tracker-v23";
 
 // Nur Offline-Reserve. Eigene Dateien werden NICHT bevorzugt aus dem Cache
 // ausgeliefert, sondern immer zuerst aus dem Netz geholt (siehe fetch-Handler).
