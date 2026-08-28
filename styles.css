@@ -474,18 +474,30 @@ a { color: inherit; }
   background: var(--surface); border: 1px solid var(--border);
   border-radius: var(--radius); overflow: hidden;
 }
+/* Ein gemeinsames Raster für alle Zeilen: so sitzen die Gruppen-Überschriften
+   exakt über ihrem Spaltenpaar, unabhängig von Schriftbreiten. */
 .vac-row {
-  display: flex; align-items: center; gap: 4px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) repeat(4, 50px);
+  align-items: center;
   padding: 8px 10px; border-bottom: 1px solid var(--border); font-size: 12.5px;
 }
 .vac-row:last-child { border-bottom: none; }
+
+.vac-group {
+  background: #fafafb; border-bottom: none; padding-bottom: 2px;
+  font-weight: 700; font-size: 11px; color: var(--text);
+}
+.vac-group-label { grid-column: span 2; text-align: center; }
+
 .vac-head {
-  background: #fafafb; font-weight: 700; font-size: 10px;
-  letter-spacing: 0.02em; color: var(--text-soft);
+  background: #fafafb; font-weight: 700; font-size: 10.5px;
+  color: var(--text-soft); padding-top: 2px; border-bottom-width: 2px;
 }
 .vac-total { background: #fafafb; font-weight: 700; }
+
 .vac-month {
-  flex: 1 1 auto; min-width: 0; font-weight: 700;
+  min-width: 0; font-weight: 700;
   display: flex; flex-direction: column; line-height: 1.15;
 }
 .vac-month em {
@@ -493,11 +505,14 @@ a { color: inherit; }
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .vac-head .vac-month, .vac-total .vac-month { display: block; }
+
 .vac-num {
-  flex: 0 0 52px; text-align: right;
+  text-align: right;
   font-family: var(--font-mono); font-variant-numeric: tabular-nums; font-size: 11.5px;
 }
-.vac-head .vac-num { font-family: var(--font-sans); }
+.vac-head .vac-num { font-family: var(--font-sans); text-transform: lowercase; }
+/* Trennt die Arbeits- von den Urlaubsspalten */
+.vac-sep { border-right: 1px solid var(--border); padding-right: 7px; }
 .vac-num.used { color: var(--teal); font-weight: 600; }
 .vac-num.under { color: var(--teal); }
 .vac-num.over { color: var(--rust); font-weight: 600; }
@@ -505,6 +520,7 @@ a { color: inherit; }
 .legend-over { color: var(--rust); font-weight: 600; }
 
 @media (max-width: 380px) {
-  .vac-num { flex: 0 0 46px; font-size: 10.5px; }
-  .vac-row { padding: 8px 7px; }
+  .vac-row { grid-template-columns: minmax(0, 1fr) repeat(4, 44px); padding: 8px 6px; }
+  .vac-num { font-size: 10.5px; }
+  .vac-group { font-size: 10.5px; }
 }

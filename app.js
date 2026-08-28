@@ -347,7 +347,7 @@ let flow = { mode: null, editingId: null, draft: null }; // shared draft used by
    real credentials; otherwise the app stays purely local, exactly
    as before).
    ========================================================= */
-const APP_VERSION = "v23 (Arbeitszeit/Urlaub)";
+const APP_VERSION = "v24 (Arbeitszeit/Urlaub)";
 
 const SB = (window.SUPABASE_CONFIG && window.SUPABASE_CONFIG.url && window.SUPABASE_CONFIG.anonKey)
   ? supabase.createClient(window.SUPABASE_CONFIG.url, window.SUPABASE_CONFIG.anonKey, {
@@ -1907,34 +1907,39 @@ function renderVacationOverview() {
           ${m.short}
           <em>${contract ? escapeHtml(contract.name) : "kein Vertrag"}</em>
         </span>
-        <span class="vac-num">${soll ? fmtHoursDecimal(soll * 60) : "–"}</span>
         <span class="vac-num ${istClass}">${ist ? fmtHoursDecimal(ist * 60) : "–"}</span>
-        <span class="vac-num">${vacSoll ? fmtHoursDecimal(vacSoll * 60) : "–"}</span>
+        <span class="vac-num vac-sep">${soll ? fmtHoursDecimal(soll * 60) : "–"}</span>
         <span class="vac-num ${vacIst > 0 ? "used" : ""}">${vacIst ? fmtHoursDecimal(vacIst * 60) : "–"}</span>
+        <span class="vac-num">${vacSoll ? fmtHoursDecimal(vacSoll * 60) : "–"}</span>
       </div>`;
   }).join("");
 
   document.getElementById("vacation-overview").innerHTML = `
     <div class="vac-table">
+      <div class="vac-row vac-group">
+        <span class="vac-month"></span>
+        <span class="vac-group-label">Arbeits h</span>
+        <span class="vac-group-label">Urlaub h</span>
+      </div>
       <div class="vac-row vac-head">
         <span class="vac-month">Monat</span>
-        <span class="vac-num">Soll</span>
-        <span class="vac-num">Ist</span>
-        <span class="vac-num">Url.&nbsp;Anspr.</span>
-        <span class="vac-num">Url.&nbsp;gen.</span>
+        <span class="vac-num">ist</span>
+        <span class="vac-num vac-sep">soll</span>
+        <span class="vac-num">ist</span>
+        <span class="vac-num">soll</span>
       </div>
       ${rows}
       <div class="vac-row vac-total">
         <span class="vac-month">Σ ${year}</span>
-        <span class="vac-num">${fmtHoursDecimal(sumSoll * 60)}</span>
         <span class="vac-num">${fmtHoursDecimal(sumIst * 60)}</span>
-        <span class="vac-num">${fmtHoursDecimal(sumVacSoll * 60)}</span>
+        <span class="vac-num vac-sep">${fmtHoursDecimal(sumSoll * 60)}</span>
         <span class="vac-num">${fmtHoursDecimal(sumVacIst * 60)}</span>
+        <span class="vac-num">${fmtHoursDecimal(sumVacSoll * 60)}</span>
       </div>
     </div>
     <p class="hint" style="margin-top:8px;">
-      Alle Werte in Stunden. Soll = Werktage × Tagesstunden laut Vertrag.
-      Ist = erfasste Arbeitszeit. <span class="legend-under">grün</span> = unter dem Soll,
+      Soll = Werktage × Tagesstunden laut Vertrag, Ist = erfasste Arbeitszeit.
+      <span class="legend-under">Grün</span> = unter dem Soll,
       <span class="legend-over">rot</span> = darüber.
     </p>`;
 }
