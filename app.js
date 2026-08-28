@@ -347,7 +347,7 @@ let flow = { mode: null, editingId: null, draft: null }; // shared draft used by
    real credentials; otherwise the app stays purely local, exactly
    as before).
    ========================================================= */
-const APP_VERSION = "v26 (Labor je Projekt)";
+const APP_VERSION = "v27 (Labor je Projekt aufteilbar)";
 
 const SB = (window.SUPABASE_CONFIG && window.SUPABASE_CONFIG.url && window.SUPABASE_CONFIG.anonKey)
   ? supabase.createClient(window.SUPABASE_CONFIG.url, window.SUPABASE_CONFIG.anonKey, {
@@ -1416,6 +1416,10 @@ function renderAllocProjectRows() {
   container.querySelectorAll("input[data-project-activity]").forEach((inp) => {
     typedActivities[inp.dataset.projectActivity] = inp.value;
   });
+  const typedLabs = {};
+  container.querySelectorAll("input[data-lab-of-project]").forEach((inp) => {
+    typedLabs[`${inp.dataset.labOfProject}|${inp.dataset.labId}`] = inp.value;
+  });
 
   const ccMinutes = {};
   document.querySelectorAll("#alloc-costcenter-rows input[data-cc-id]").forEach((inp) => {
@@ -1461,18 +1465,47 @@ function renderAllocProjectRows() {
         ? typedActivities[pr.id]
         : (existing ? (existing.activity || "") : "");
       const color = PROJECT_PALETTE[pr.colorIndex % PROJECT_PALETTE.length];
-      return allocRowHTML({
+      const rowHtml = allocRowHTML({
         color,
         label: `${escapeHtml(pr.code)} — ${escapeHtml(pr.name)}`,
         attr: "data-project-id",
         id: pr.id,
         value,
         extraAttr: `data-parent-cc="${cc.id}"`,
-      }) + `
+      });
+
+      /* Laborzeit gehört immer zu genau einem Projekt. Die Felder erscheinen deshalb
+         unter dem jeweiligen Projekt – so lassen sich 5 h Labor beliebig aufteilen
+         (z. B. 3 h auf Projekt A, 2 h auf Projekt B). */
+      const hasHours = parseHoursInput(value) > 0;
+      const labFields = (hasHours && labs.length > 0) ? `
+        <div class="alloc-lab-sub">
+          <div class="alloc-lab-sub-title">davon im Labor</div>
+          ${labs.map((lab) => {
+            const key = `${pr.id}|${lab.id}`;
+            const savedLab = (flow.draft.laborAllocations || [])
+              .find((a) => a.labId === lab.id && a.projectId === pr.id);
+            const labValue = typedLabs[key] !== undefined
+              ? typedLabs[key]
+              : (savedLab ? minutesToHoursInput(savedLab.minutes) : "");
+            const labColor = LAB_PALETTE[lab.colorIndex % LAB_PALETTE.length];
+            return `
+              <div class="alloc-lab-line">
+                <span class="alloc-swatch" style="background:${labColor};"></span>
+                <span class="alloc-lab-name">${escapeHtml(lab.code)}</span>
+                <input type="text" inputmode="decimal" placeholder="0"
+                  data-lab-of-project="${pr.id}" data-lab-id="${lab.id}" value="${labValue}" />
+                <span class="alloc-lab-unit">h</span>
+              </div>`;
+          }).join("")}
+          <div class="hint" data-lab-sum="${pr.id}"></div>
+        </div>` : "";
+
+      return rowHtml + `
         <div class="alloc-activity">
           <input type="text" data-project-activity="${pr.id}"
             placeholder="Tätigkeit für ${escapeHtml(pr.code)} …" value="${escapeHtml(activity)}" />
-        </div>`;
+        </div>` + labFields;
     }).join("");
     return `
       <div class="alloc-group-label" data-group-hint="${cc.id}">
@@ -1483,9 +1516,33 @@ function renderAllocProjectRows() {
   }).join("");
 
   container.querySelectorAll("input[data-project-id]").forEach((inp) =>
-    inp.addEventListener("input", updateAllocGroupHints));
+    inp.addEventListener("input", () => { updateAllocGroupHints(); renderAllocProjectRows(); }));
+  container.querySelectorAll("input[data-lab-of-project]").forEach((inp) =>
+    inp.addEventListener("input", updateProjectLabSums));
   wirePercentButtons(container, updateAllocGroupHints);
   updateAllocGroupHints();
+  updateProjectLabSums();
+}
+
+/* Zeigt je Projekt, wie viel der Projektzeit im Labor verbracht wurde. */
+function updateProjectLabSums() {
+  document.querySelectorAll("#alloc-project-rows [data-lab-sum]").forEach((el) => {
+    const prId = el.dataset.labSum;
+    const labSum = Array.from(
+      document.querySelectorAll(`#alloc-project-rows input[data-lab-of-project="${prId}"]`)
+    ).reduce((sum, inp) => sum + parseHoursInput(inp.value), 0);
+    const prInput = document.querySelector(`#alloc-project-rows input[data-project-id="${prId}"]`);
+    const prMinutes = prInput ? parseHoursInput(prInput.value) : 0;
+
+    if (labSum === 0) { el.textContent = ""; el.className = "hint"; return; }
+    if (labSum > prMinutes) {
+      el.textContent = `Laborzeit (${fmtHoursDecimal(labSum)} h) übersteigt die Projektzeit (${fmtHoursDecimal(prMinutes)} h).`;
+      el.className = "hint warn";
+    } else {
+      el.textContent = `${fmtHoursDecimal(labSum)} h von ${fmtHoursDecimal(prMinutes)} h im Labor`;
+      el.className = "hint ok";
+    }
+  });
 }
 
 function updateAllocGroupHints() {
@@ -1718,50 +1775,42 @@ function renderAllocLabRows() {
   }
   noLabHint.style.display = "none";
 
-  /* Projekte, denen Laborzeit zugeordnet werden kann: alle, deren Kostenstelle
-     in diesem Eintrag Zeit bekommen hat. */
-  const ccWithTime = readAllocRows().map((a) => a.costCenterId);
-  const selectable = projects.filter((p) => ccWithTime.includes(p.costCenterId));
-
   container.innerHTML = labs.map((lab) => {
-    const existing = (flow.draft.laborAllocations || []).find((a) => a.labId === lab.id);
+    const existing = (flow.draft.laborAllocations || [])
+      .find((a) => a.labId === lab.id && !a.projectId);
     const color = LAB_PALETTE[lab.colorIndex % LAB_PALETTE.length];
-    const options = [`<option value="">— ohne Projekt —</option>`]
-      .concat(selectable.map((p) =>
-        `<option value="${p.id}" ${existing && existing.projectId === p.id ? "selected" : ""}>${escapeHtml(p.code)}</option>`))
-      .join("");
     return allocRowHTML({
       color,
       label: `${escapeHtml(lab.code)} — ${escapeHtml(lab.name)}`,
       attr: "data-lab-id",
       id: lab.id,
       value: existing ? minutesToHoursInput(existing.minutes) : "",
-    }) + `
-      <div class="alloc-activity">
-        <select data-lab-project="${lab.id}">${options}</select>
-      </div>`;
+    });
   }).join("");
 
   container.querySelectorAll("input[data-lab-id]").forEach((inp) =>
     inp.addEventListener("input", updateLabTotalHint));
-  container.querySelectorAll("select[data-lab-project]").forEach((sel) =>
-    sel.addEventListener("change", updateLabTotalHint));
   wirePercentButtons(container, updateLabTotalHint);
   updateLabTotalHint();
 }
 
 function readLabAllocRows() {
   const rows = [];
-  document.querySelectorAll("#alloc-lab-rows input[data-lab-id]").forEach((inp) => {
+  // Laborzeit steht jetzt unter dem jeweiligen Projekt: Paar aus Projekt und Labor.
+  document.querySelectorAll("#alloc-project-rows input[data-lab-of-project]").forEach((inp) => {
     const minutes = parseHoursInput(inp.value);
     if (minutes > 0) {
-      const sel = document.querySelector(`#alloc-lab-rows select[data-lab-project="${inp.dataset.labId}"]`);
       rows.push({
         labId: inp.dataset.labId,
         minutes,
-        projectId: sel && sel.value ? sel.value : null,
+        projectId: inp.dataset.labOfProject,
       });
     }
+  });
+  // Laborzeit ohne Projektbezug (eigener Abschnitt weiter unten).
+  document.querySelectorAll("#alloc-lab-rows input[data-lab-id]").forEach((inp) => {
+    const minutes = parseHoursInput(inp.value);
+    if (minutes > 0) rows.push({ labId: inp.dataset.labId, minutes, projectId: null });
   });
   return rows;
 }
@@ -2535,18 +2584,20 @@ function buildWorkbook() {
 
   // ---- Labor sheet: one side-by-side block per Labor ----
   const labBlocks = labs.map((lab) => {
-    const rows = sorted
-      .map((e) => {
-        const alloc = (e.laborAllocations || []).find((a) => a.labId === lab.id);
-        if (!alloc) return null;
-        const pr = alloc.projectId ? projects.find((p) => p.id === alloc.projectId) : null;
-        const desc = pr
-          ? `${pr.code}${(e.projectAllocations || []).find((a) => a.projectId === pr.id)?.activity
-              ? " — " + (e.projectAllocations || []).find((a) => a.projectId === pr.id).activity : ""}`
-          : entryActivitySummary(e);
-        return [fmtDatePlain(e.date), Number((alloc.minutes / 60).toFixed(2)), desc];
-      })
-      .filter(Boolean);
+    /* flatMap statt find: ein Labor kann innerhalb EINES Eintrags mehrfach vorkommen,
+       nämlich einmal je Projekt (z. B. 3 h auf Projekt A, 2 h auf Projekt B). */
+    const rows = sorted.flatMap((e) =>
+      (e.laborAllocations || [])
+        .filter((a) => a.labId === lab.id)
+        .map((alloc) => {
+          const pr = alloc.projectId ? projects.find((p) => p.id === alloc.projectId) : null;
+          const prAlloc = pr ? (e.projectAllocations || []).find((a) => a.projectId === pr.id) : null;
+          const desc = pr
+            ? `${pr.code}${prAlloc && prAlloc.activity ? " — " + prAlloc.activity : ""}`
+            : entryActivitySummary(e);
+          return [fmtDatePlain(e.date), Number((alloc.minutes / 60).toFixed(2)), desc];
+        })
+    );
     return {
       label: lab.name || lab.code,
       rows,
