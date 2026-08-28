@@ -347,7 +347,7 @@ let flow = { mode: null, editingId: null, draft: null }; // shared draft used by
    real credentials; otherwise the app stays purely local, exactly
    as before).
    ========================================================= */
-const APP_VERSION = "v32 (Projektzuordnung)";
+const APP_VERSION = "v33 (Übersicht-Werte)";
 
 const SB = (window.SUPABASE_CONFIG && window.SUPABASE_CONFIG.url && window.SUPABASE_CONFIG.anonKey)
   ? supabase.createClient(window.SUPABASE_CONFIG.url, window.SUPABASE_CONFIG.anonKey, {
@@ -2299,25 +2299,39 @@ function buildUebersichtSheet(year, monatsblaetterName, monthTotals) {
   const ws = XLSX.utils.aoa_to_sheet(aoa);
   const O = 14; // column O (A=0 … M=12, N=13 spacer, O=14)
   const BOLD = { font: { bold: true } };
+  const cell = (r, c, value, formula) => {
+    ws[XLSX.utils.encode_cell({ r, c })] = { t: "n", v: value, f: formula, z: "0.00" };
+  };
 
+  let sumSoll = 0, sumIst = 0, sumVacSoll = 0, sumVacIst = 0;
   for (let m = 0; m < 12; m++) {
     const col = m + 1; // B(1) … M(12)
-    ws[XLSX.utils.encode_cell({ r: 3, c: col })] = { t: "n", f: `'${monatsblaetterName}'!${monthTotals[m].sollAddr}`, z: "0.00" };
-    ws[XLSX.utils.encode_cell({ r: 4, c: col })] = { t: "n", f: `'${monatsblaetterName}'!${monthTotals[m].istAddr}`, z: "0.00" };
-    // Best-effort bold on the month-name header cells (both blocks). The free SheetJS build
-    // may not persist cell styles on write — see the note in the README/export hint.
+    const soll = monthTotals[m].sollHours || 0;
+    const ist = monthTotals[m].istHours || 0;
+    sumSoll += soll; sumIst += ist;
+    sumVacSoll += vacationSollPerMonth[m]; sumVacIst += vacationIstPerMonth[m];
+
+    // Werte MIT Formel schreiben, sonst zeigt Excel leere Zellen an.
+    cell(3, col, soll, `'${monatsblaetterName}'!${monthTotals[m].sollAddr}`);
+    cell(4, col, ist, `'${monatsblaetterName}'!${monthTotals[m].istAddr}`);
+    const colL = XLSX.utils.encode_col(col);
+    cell(5, col, Number((ist - soll).toFixed(2)), `${colL}5-${colL}4`);
+    cell(10, col, Number((vacationIstPerMonth[m] - vacationSollPerMonth[m]).toFixed(2)),
+      `${colL}10-${colL}9`);
+
     const headCell1 = ws[XLSX.utils.encode_cell({ r: 1, c: col })];
     if (headCell1) headCell1.s = BOLD;
     const headCell2 = ws[XLSX.utils.encode_cell({ r: 7, c: col })];
     if (headCell2) headCell2.s = BOLD;
   }
-  ws[XLSX.utils.encode_cell({ r: 3, c: O })] = { t: "n", f: "SUM(B4:M4)", z: "0.00" };
-  ws[XLSX.utils.encode_cell({ r: 4, c: O })] = { t: "n", f: "SUM(B5:M5)", z: "0.00" };
-  ws[XLSX.utils.encode_cell({ r: 5, c: O })] = { t: "n", f: "O5-O4", z: "0.00" };
 
-  ws[XLSX.utils.encode_cell({ r: 8, c: O })] = { t: "n", f: "SUM(B9:M9)", z: "0.00" };
-  ws[XLSX.utils.encode_cell({ r: 9, c: O })] = { t: "n", f: "SUM(B10:M10)", z: "0.00" };
-  ws[XLSX.utils.encode_cell({ r: 10, c: O })] = { t: "n", f: "O10-O9", z: "0.00" };
+  cell(3, O, Number(sumSoll.toFixed(2)), "SUM(B4:M4)");
+  cell(4, O, Number(sumIst.toFixed(2)), "SUM(B5:M5)");
+  cell(5, O, Number((sumIst - sumSoll).toFixed(2)), "O5-O4");
+
+  cell(8, O, Number(sumVacSoll.toFixed(2)), "SUM(B9:M9)");
+  cell(9, O, Number(sumVacIst.toFixed(2)), "SUM(B10:M10)");
+  cell(10, O, Number((sumVacIst - sumVacSoll).toFixed(2)), "O10-O9");
 
   ws["!cols"] = [{ wch: 18 }, ...Array(12).fill({ wch: 8 }), { wch: 2 }, { wch: 16 }];
   return ws;
@@ -2391,8 +2405,17 @@ function buildMonatsblaetterSheet(year, overviewSheetName) {
 
     // SOLL = Wochentage im Monat × (Stunden pro Woche ÷ 5) — direkt aus der Übersicht, ohne
     // eigene Tages-Spalte (die wurde entfernt).
-    formulaPatches.push({ r: blockStart, c: 1, f: `'${overviewSheetName}'!${monthCol}3/5*${weekdayCount}`, z: "0.00" });
-    formulaPatches.push({ r: blockStart + 1, c: 1, f: `SUM(G${dataStart + 1}:G${dataEnd + 1})`, z: "0.00" });
+    /* Formelzellen brauchen zusätzlich einen berechneten Wert: ohne diesen zeigt Excel
+       leere Zellen an, solange es nicht selbst neu rechnet. */
+    const sollHours = Number(((weeklyHoursForMonth(year, monthIndex) / 5) * weekdayCount).toFixed(2));
+    const istHours = Number((entries
+      .filter((e) => e.date.startsWith(isoPrefix))
+      .reduce((sum, e) => sum + e.totalMinutes, 0) / 60).toFixed(2));
+
+    formulaPatches.push({ r: blockStart, c: 1, v: sollHours,
+      f: `'${overviewSheetName}'!${monthCol}3/5*${weekdayCount}`, z: "0.00" });
+    formulaPatches.push({ r: blockStart + 1, c: 1, v: istHours,
+      f: `SUM(G${dataStart + 1}:G${dataEnd + 1})`, z: "0.00" });
 
     merges.push(
       { s: { r: blockStart, c: 3 }, e: { r: blockStart, c: 6 } },
@@ -2410,6 +2433,8 @@ function buildMonatsblaetterSheet(year, overviewSheetName) {
       sollAddr: XLSX.utils.encode_cell({ r: blockStart, c: 1 }),
       istAddr: XLSX.utils.encode_cell({ r: blockStart + 1, c: 1 }),
       vacationDays: monthVacationDays,
+      sollHours,
+      istHours,
     });
 
     cursor = dataEnd + 2; // gap row between this month's block and the next
@@ -2418,7 +2443,7 @@ function buildMonatsblaetterSheet(year, overviewSheetName) {
 
   const ws = XLSX.utils.aoa_to_sheet(aoa);
   formulaPatches.forEach((p) => {
-    ws[XLSX.utils.encode_cell({ r: p.r, c: p.c })] = { t: "n", f: p.f, z: p.z };
+    ws[XLSX.utils.encode_cell({ r: p.r, c: p.c })] = { t: "n", v: p.v, f: p.f, z: p.z };
   });
   boldCells.forEach(({ r, c }) => {
     const addr = XLSX.utils.encode_cell({ r, c });
@@ -2645,8 +2670,12 @@ function buildWorkbook() {
         .map((alloc) => {
           const pr = alloc.projectId ? projects.find((p) => p.id === alloc.projectId) : null;
           const prAlloc = pr ? (e.projectAllocations || []).find((a) => a.projectId === pr.id) : null;
+          // Kostenstellen-Kürzel voranstellen: "ALLG" allein ist mehrdeutig,
+          // weil jede Kostenstelle ein eigenes Allgemein-Projekt hat.
+          const prCc = pr ? costCenters.find((c) => c.id === pr.costCenterId) : null;
+          const label = pr ? `${prCc ? prCc.code + " · " : ""}${pr.code}` : "";
           const desc = pr
-            ? `${pr.code}${prAlloc && prAlloc.activity ? " — " + prAlloc.activity : ""}`
+            ? `${label}${prAlloc && prAlloc.activity ? " — " + prAlloc.activity : ""}`
             : entryActivitySummary(e);
           return [fmtDatePlain(e.date), Number((alloc.minutes / 60).toFixed(2)), desc];
         })
@@ -2744,6 +2773,10 @@ function buildWorkbook() {
     { wch: 9 },                              // Summe
   ];
   XLSX.utils.book_append_sheet(wb, wsLabor, sanitizeSheetName("Labor", usedNames));
+
+  // Excel soll beim Öffnen einmal durchrechnen, damit alle Formeln aktuell sind.
+  wb.Workbook = wb.Workbook || {};
+  wb.Workbook.CalcPr = { fullCalcOnLoad: true };
 
   const filename = `Arbeitszeit_Export_${todayStr()}.xlsx`;
   XLSX.writeFile(wb, filename, { cellStyles: true });
