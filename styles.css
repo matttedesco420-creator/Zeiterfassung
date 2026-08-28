@@ -524,3 +524,14 @@ a { color: inherit; }
   .vac-num { font-size: 10.5px; }
   .vac-group { font-size: 10.5px; }
 }
+
+/* ---------- Ladeanzeige beim Start ---------- */
+.boot-screen {
+  position: fixed; inset: 0; z-index: 200;
+  background: var(--ink); color: #fff;
+  display: flex; align-items: center; justify-content: center; padding: 24px;
+}
+.boot-inner { text-align: center; max-width: 300px; }
+.boot-logo { font-size: 34px; margin-bottom: 12px; }
+.boot-text { font-size: 14px; color: var(--text-faint); line-height: 1.5; }
+.boot-screen .btn-ghost { color: #fff; border-color: rgba(255,255,255,0.28); }

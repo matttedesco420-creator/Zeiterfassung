@@ -347,7 +347,7 @@ let flow = { mode: null, editingId: null, draft: null }; // shared draft used by
    real credentials; otherwise the app stays purely local, exactly
    as before).
    ========================================================= */
-const APP_VERSION = "v24 (Arbeitszeit/Urlaub)";
+const APP_VERSION = "v25 (Ladeschutz)";
 
 const SB = (window.SUPABASE_CONFIG && window.SUPABASE_CONFIG.url && window.SUPABASE_CONFIG.anonKey)
   ? supabase.createClient(window.SUPABASE_CONFIG.url, window.SUPABASE_CONFIG.anonKey, {
@@ -581,16 +581,29 @@ async function runDiagnostics() {
   return lines.join("\n");
 }
 
+/* Bricht eine hängende Abfrage nach n Sekunden ab. Ohne das wartet Promise.all
+   unbegrenzt – ein einziger langsamer Aufruf (z. B. beim Kaltstart eines pausierten
+   Supabase-Projekts) ließ die App sonst mit leerer Seite stehen. */
+function withTimeout(promise, ms, label) {
+  return Promise.race([
+    Promise.resolve(promise),
+    new Promise((resolve) =>
+      setTimeout(() => resolve({ data: null, error: { message: `Zeitüberschreitung (${label})` } }), ms)
+    ),
+  ]);
+}
+
 async function fetchAllFromSupabase() {
   if (!SB || !currentUser) return;
+  const T = 20000;
   const [ccRes, prRes, laRes, coRes, enRes, vaRes, stRes] = await Promise.all([
-    SB.from("cost_centers").select("*").order("created_at"),
-    SB.from("projects").select("*").order("created_at"),
-    SB.from("labs").select("*").order("created_at"),
-    SB.from("contracts").select("*").order("created_at"),
-    SB.from("entries").select("*").order("date"),
-    SB.from("vacations").select("*").order("start_date"),
-    SB.from("settings").select("*").eq("user_id", currentUser.id).maybeSingle(),
+    withTimeout(SB.from("cost_centers").select("*").order("created_at"), T, "Kostenstellen"),
+    withTimeout(SB.from("projects").select("*").order("created_at"), T, "Projekte"),
+    withTimeout(SB.from("labs").select("*").order("created_at"), T, "Labore"),
+    withTimeout(SB.from("contracts").select("*").order("created_at"), T, "Verträge"),
+    withTimeout(SB.from("entries").select("*").order("date"), T, "Einträge"),
+    withTimeout(SB.from("vacations").select("*").order("start_date"), T, "Urlaube"),
+    withTimeout(SB.from("settings").select("*").eq("user_id", currentUser.id).maybeSingle(), T, "Profil"),
   ]);
 
   const failed = [ccRes, prRes, laRes, coRes, enRes, vaRes].filter((r) => r.error);
@@ -667,6 +680,17 @@ function handleRemoteChange() {
 }
 
 /* ---- auth flow ---- */
+function hideBootScreen() {
+  const el = document.getElementById("boot-screen");
+  if (el) el.style.display = "none";
+}
+function bootMessage(msg, showSkip) {
+  const t = document.getElementById("boot-text");
+  if (t) t.textContent = msg;
+  const b = document.getElementById("btn-boot-skip");
+  if (b && showSkip) b.style.display = "inline-flex";
+}
+
 async function initAuth() {
   wireAuthEvents();
   const diag = document.getElementById("auth-diag");
@@ -676,11 +700,30 @@ async function initAuth() {
   } catch {
     diag.textContent = `${APP_VERSION} · Konfiguration unvollständig`;
   }
-  const { data: { session } } = await SB.auth.getSession();
+  // Falls der Start ungewöhnlich lange dauert (z. B. Supabase-Kaltstart), Hinweis zeigen.
+  const slowHint = setTimeout(() => {
+    bootMessage("Der Server antwortet gerade langsam. Das kann beim ersten Start "
+      + "des Tages bis zu einer Minute dauern.", true);
+  }, 6000);
+  document.getElementById("btn-boot-skip").addEventListener("click", () => {
+    hideBootScreen();
+    document.getElementById("auth-gate").style.display = "flex";
+  });
+
+  let session = null;
+  try {
+    const res = await withTimeout(SB.auth.getSession(), 15000, "Sitzung");
+    session = res && res.data ? res.data.session : null;
+  } catch (err) {
+    console.error("Sitzung konnte nicht geladen werden:", err);
+  }
+  clearTimeout(slowHint);
+
   if (session) {
     currentUser = session.user;
     await onLoggedIn();
   } else {
+    hideBootScreen();
     document.getElementById("auth-gate").style.display = "flex";
   }
   SB.auth.onAuthStateChange((_event, sess) => {
@@ -695,6 +738,7 @@ async function initAuth() {
 }
 
 async function onLoggedIn() {
+  hideBootScreen();
   document.getElementById("auth-gate").style.display = "none";
   document.getElementById("app-shell").style.display = "";
   document.getElementById("btn-account").style.display = "flex";
@@ -2815,6 +2859,7 @@ document.addEventListener("DOMContentLoaded", () => {
   if (SB) {
     initAuth();
   } else {
+    hideBootScreen();
     document.getElementById("app-shell").style.display = "";
     const accountBtn = document.getElementById("btn-account");
     accountBtn.style.display = "flex";

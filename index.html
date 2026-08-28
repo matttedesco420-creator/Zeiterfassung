@@ -18,6 +18,17 @@
 </head>
 <body>
 
+<!-- Ladeanzeige, damit nie eine komplett leere Seite stehen bleibt -->
+<div class="boot-screen" id="boot-screen">
+  <div class="boot-inner">
+    <div class="boot-logo">⏱</div>
+    <div class="boot-text" id="boot-text">Daten werden geladen …</div>
+    <button type="button" class="btn btn-ghost" id="btn-boot-skip" style="display:none; margin-top:16px;">
+      Ohne Synchronisierung fortfahren
+    </button>
+  </div>
+</div>
+
 <!-- ============ AUTH GATE (nur sichtbar, wenn Supabase konfiguriert ist) ============ -->
 <div class="auth-gate" id="auth-gate" style="display:none;">
   <div class="auth-card">
