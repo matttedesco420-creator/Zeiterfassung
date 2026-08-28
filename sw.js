@@ -1,6 +1,8 @@
-// Bump this version string whenever index.html/app.js/styles.css change,
-// otherwise devices that already installed the app keep serving old cached files.
-const CACHE_NAME = "arbeitszeit-tracker-v17";
+// Version bei jeder Änderung hochzählen.
+const CACHE_NAME = "arbeitszeit-tracker-v19";
+
+// Nur Offline-Reserve. Eigene Dateien werden NICHT bevorzugt aus dem Cache
+// ausgeliefert, sondern immer zuerst aus dem Netz geholt (siehe fetch-Handler).
 const PRECACHE_URLS = [
   "./",
   "./index.html",
@@ -18,45 +20,60 @@ const PRECACHE_URLS = [
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => {
-      return Promise.all(
-        PRECACHE_URLS.map((url) =>
-          cache.add(url).catch(() => {
-            /* ignore individual failures (e.g. offline first install) */
-          })
-        )
-      );
-    })
+    caches.open(CACHE_NAME).then((cache) =>
+      Promise.all(PRECACHE_URLS.map((url) => cache.add(url).catch(() => {})))
+    )
   );
   self.skipWaiting();
 });
 
 self.addEventListener("activate", (event) => {
   event.waitUntil(
-    caches.keys().then((keys) =>
-      Promise.all(
-        keys.filter((key) => key !== CACHE_NAME).map((key) => caches.delete(key))
-      )
-    )
+    caches.keys()
+      .then((keys) => Promise.all(keys.filter((k) => k !== CACHE_NAME).map((k) => caches.delete(k))))
+      .then(() => self.clients.claim())
   );
-  self.clients.claim();
+});
+
+self.addEventListener("message", (event) => {
+  if (event.data === "SKIP_WAITING") self.skipWaiting();
 });
 
 self.addEventListener("fetch", (event) => {
-  if (event.request.method !== "GET") return;
+  const req = event.request;
+  if (req.method !== "GET") return;
 
-  event.respondWith(
-    caches.match(event.request).then((cached) => {
-      const fetchPromise = fetch(event.request)
-        .then((networkResponse) => {
-          if (networkResponse && networkResponse.status === 200) {
-            const clone = networkResponse.clone();
-            caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
+  const url = new URL(req.url);
+  const isOwnFile = url.origin === self.location.origin;
+
+  if (isOwnFile) {
+    /* NETWORK FIRST fuer eigene Dateien: Eine neue Version landet damit sofort auf dem
+       Geraet. Der Cache ist nur noch Reserve fuer den Offline-Fall. Vorher galt
+       cache-first, weshalb alte Versionen hartnaeckig haengen blieben. */
+    event.respondWith(
+      fetch(req)
+        .then((res) => {
+          if (res && res.status === 200) {
+            const copy = res.clone();
+            caches.open(CACHE_NAME).then((c) => c.put(req, copy));
           }
-          return networkResponse;
+          return res;
         })
-        .catch(() => cached);
-      return cached || fetchPromise;
-    })
+        .catch(() => caches.match(req).then((cached) => cached || caches.match("./index.html")))
+    );
+    return;
+  }
+
+  // Fremde Ressourcen (CDN-Bibliotheken) duerfen aus dem Cache kommen.
+  event.respondWith(
+    caches.match(req).then((cached) =>
+      cached || fetch(req).then((res) => {
+        if (res && res.status === 200) {
+          const copy = res.clone();
+          caches.open(CACHE_NAME).then((c) => c.put(req, copy));
+        }
+        return res;
+      })
+    )
   );
 });

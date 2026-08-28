@@ -10,6 +10,7 @@ const K = {
   profile: "azt_profile_v1",
   vacations: "azt_vacations_v1",
   labs: "azt_labs_v1",
+  contracts: "azt_contracts_v1",
   timer: "azt_timer_v1",
 };
 
@@ -206,6 +207,26 @@ function loadLabs() {
 }
 function saveLabs(list) { localStorage.setItem(K.labs, JSON.stringify(list)); }
 
+function loadContracts() {
+  try { return JSON.parse(localStorage.getItem(K.contracts)) || []; }
+  catch { return []; }
+}
+function saveContracts(list) { localStorage.setItem(K.contracts, JSON.stringify(list)); }
+
+/* Wochenstunden für einen konkreten Monat: der zugeordnete Vertrag gewinnt,
+   sonst der Wert aus den Profildaten (Rückfallebene). */
+function weeklyHoursForMonth(year, monthIndex) {
+  const key = `${year}-${String(monthIndex + 1).padStart(2, "0")}`;
+  const contract = contracts.find((c) => (c.months || []).includes(key));
+  if (contract && contract.weeklyHours != null) return Number(contract.weeklyHours);
+  return profile.weeklyHours != null ? Number(profile.weeklyHours) : 0;
+}
+
+/* Urlaubs-Soll pro Monat = Wochenstunden x 5/12 (entspricht 25 Urlaubstagen im Jahr). */
+function monthlyVacationHours(year, monthIndex) {
+  return Number(((weeklyHoursForMonth(year, monthIndex) * 5) / 12).toFixed(2));
+}
+
 /* Returns every ISO date between start and end (inclusive), weekends excluded. */
 function vacationWeekdaysInRange(startISO, endISO) {
   const out = [];
@@ -264,6 +285,7 @@ let timer = loadTimer();
 let profile = loadProfile();
 let vacations = loadVacations();
 let labs = loadLabs();
+let contracts = loadContracts();
 
 /* Einmalige Migration: Frühere Versionen vergaben Kurz-IDs (z. B. "m2x1k3f9abc").
    Supabase erwartet echte UUIDs, weshalb das Hochladen fehlschlug. Wir vergeben neue
@@ -280,6 +302,7 @@ function migrateLegacyIds() {
   remap(costCenters);
   remap(projects);
   remap(labs);
+  remap(contracts);
   remap(vacations);
   remap(entries);
 
@@ -303,6 +326,7 @@ function migrateLegacyIds() {
   saveCostCenters(costCenters);
   saveProjects(projects);
   saveLabs(labs);
+  saveContracts(contracts);
   saveVacations(vacations);
   saveEntries(entries);
   return true;
@@ -317,7 +341,7 @@ let flow = { mode: null, editingId: null, draft: null }; // shared draft used by
    real credentials; otherwise the app stays purely local, exactly
    as before).
    ========================================================= */
-const APP_VERSION = "v17 (Dezimalstunden)";
+const APP_VERSION = "v19 (Verträge + Zeitraum-Export)";
 
 const SB = (window.SUPABASE_CONFIG && window.SUPABASE_CONFIG.url && window.SUPABASE_CONFIG.anonKey)
   ? supabase.createClient(window.SUPABASE_CONFIG.url, window.SUPABASE_CONFIG.anonKey, {
@@ -427,6 +451,19 @@ async function deleteLabRemote(id) {
   const { error } = await SB.from("labs").delete().eq("id", id);
   if (error) queueRetry(() => deleteLabRemote(id));
 }
+async function pushContract(c) {
+  if (!SB || !currentUser) return;
+  const { error } = await SB.from("contracts").upsert({
+    id: c.id, user_id: currentUser.id, name: c.name,
+    weekly_hours: c.weeklyHours, months: c.months || [],
+  });
+  if (error) { reportSyncError("Vertrag", error); queueRetry(() => pushContract(c)); }
+}
+async function deleteContractRemote(id) {
+  if (!SB || !currentUser) return;
+  const { error } = await SB.from("contracts").delete().eq("id", id);
+  if (error) queueRetry(() => deleteContractRemote(id));
+}
 async function pushVacation(v) {
   if (!SB || !currentUser) return;
   const { error } = await SB.from("vacations").upsert({
@@ -480,6 +517,12 @@ async function bulkReplaceRemote() {
     }))));
   }
   if (entries.length) check("Einträge speichern", await SB.from("entries").insert(entries.map(entryToRow)));
+  if (contracts.length) {
+    await SB.from("contracts").insert(contracts.map((c) => ({
+      id: c.id, user_id: currentUser.id, name: c.name,
+      weekly_hours: c.weeklyHours, months: c.months || [],
+    })));
+  }
   if (vacations.length) {
     check("Urlaub speichern", await SB.from("vacations").insert(vacations.map((v) => ({
       id: v.id, user_id: currentUser.id, start_date: v.startDate, end_date: v.endDate,
@@ -506,7 +549,7 @@ async function runDiagnostics() {
   lines.push(`Angemeldet: ${session.user.email}`);
   lines.push(`Benutzer-ID: ${session.user.id}`);
 
-  const tables = ["cost_centers", "projects", "labs", "entries", "vacations", "settings"];
+  const tables = ["cost_centers", "projects", "labs", "contracts", "entries", "vacations", "settings"];
   for (const t of tables) {
     const res = await SB.from(t).select("*", { count: "exact", head: true });
     if (res.error) lines.push(`Tabelle ${t}: FEHLER – ${res.error.message}`);
@@ -534,16 +577,17 @@ async function runDiagnostics() {
 
 async function fetchAllFromSupabase() {
   if (!SB || !currentUser) return;
-  const [ccRes, prRes, laRes, enRes, vaRes, stRes] = await Promise.all([
+  const [ccRes, prRes, laRes, coRes, enRes, vaRes, stRes] = await Promise.all([
     SB.from("cost_centers").select("*").order("created_at"),
     SB.from("projects").select("*").order("created_at"),
     SB.from("labs").select("*").order("created_at"),
+    SB.from("contracts").select("*").order("created_at"),
     SB.from("entries").select("*").order("date"),
     SB.from("vacations").select("*").order("start_date"),
     SB.from("settings").select("*").eq("user_id", currentUser.id).maybeSingle(),
   ]);
 
-  const failed = [ccRes, prRes, laRes, enRes, vaRes].filter((r) => r.error);
+  const failed = [ccRes, prRes, laRes, coRes, enRes, vaRes].filter((r) => r.error);
   if (failed.length) {
     console.error("Supabase-Ladefehler:", failed.map((r) => r.error));
     toast("Daten konnten nicht geladen werden – lokale Daten bleiben erhalten.");
@@ -569,6 +613,9 @@ async function fetchAllFromSupabase() {
   projects = adopt(prRes.data, projects, rowToProject, saveProjects);
   labs = adopt(laRes.data, labs,
     (r) => ({ id: r.id, code: r.code, name: r.name, colorIndex: r.color_index }), saveLabs);
+  contracts = adopt(coRes.data, contracts,
+    (r) => ({ id: r.id, name: r.name, weeklyHours: r.weekly_hours, months: r.months || [] }),
+    saveContracts);
   entries = adopt(enRes.data, entries, rowToEntry, saveEntries);
   vacations = adopt(vaRes.data, vacations,
     (r) => ({ id: r.id, startDate: r.start_date, endDate: r.end_date }), saveVacations);
@@ -599,6 +646,7 @@ function subscribeRealtime() {
     .on("postgres_changes", { event: "*", schema: "public", table: "projects", filter }, handleRemoteChange)
     .on("postgres_changes", { event: "*", schema: "public", table: "vacations", filter }, handleRemoteChange)
     .on("postgres_changes", { event: "*", schema: "public", table: "labs", filter }, handleRemoteChange)
+    .on("postgres_changes", { event: "*", schema: "public", table: "contracts", filter }, handleRemoteChange)
     .on("postgres_changes", { event: "*", schema: "public", table: "settings", filter }, handleRemoteChange)
     .subscribe();
 }
@@ -681,7 +729,7 @@ async function runDiagnostics() {
   log(`✓ Angemeldet als ${sess.session.user.email}`);
   log(`  user_id: ${sess.session.user.id}`);
 
-  const tables = ["cost_centers", "projects", "labs", "entries", "vacations", "settings"];
+  const tables = ["cost_centers", "projects", "labs", "contracts", "entries", "vacations", "settings"];
   log("\n--- Tabellen lesen ---");
   const missing = [];
   for (const t of tables) {
@@ -716,6 +764,7 @@ async function runDiagnostics() {
 
   log("\n--- Lokale Daten ---");
   log(`Kostenstellen: ${costCenters.length}, Projekte: ${projects.length}, Labore: ${labs.length}`);
+  log(`Verträge: ${contracts.length}`);
   log(`Einträge: ${entries.length}, Urlaube: ${vacations.length}`);
   log(`Offene Sync-Vorgänge: ${pendingRetries.length}`);
   log("\nFertig. Bitte diesen Text kopieren und schicken.");
@@ -1687,6 +1736,7 @@ function renderLabs() {
       if (!confirm(msg)) return;
       labs = labs.filter((l) => l.id !== id);
       saveLabs(labs);
+      saveContracts(contracts);
       renderAll();
       toast("Labor gelöscht.");
       deleteLabRemote(id);
@@ -1700,6 +1750,105 @@ function addLab(code, name) {
   saveLabs(labs);
   renderLabs();
   pushLab(lab);
+}
+
+/* =========================================================
+   CONTRACTS (Wochenstunden je Monat)
+   ========================================================= */
+let contractMonthSelection = new Set();
+
+function contractYears() {
+  const now = new Date().getFullYear();
+  const years = new Set([now - 1, now, now + 1]);
+  entries.forEach((e) => years.add(Number(e.date.slice(0, 4))));
+  contracts.forEach((c) => (c.months || []).forEach((m) => years.add(Number(m.slice(0, 4)))));
+  return [...years].sort();
+}
+
+function renderContractYearSelect() {
+  const sel = document.getElementById("contract-year");
+  const prev = sel.value || String(new Date().getFullYear());
+  sel.innerHTML = contractYears().map((y) => `<option value="${y}">${y}</option>`).join("");
+  sel.value = contractYears().includes(Number(prev)) ? prev : String(new Date().getFullYear());
+}
+
+function renderContractMonthGrid() {
+  const grid = document.getElementById("contract-months");
+  const year = document.getElementById("contract-year").value;
+  grid.innerHTML = MONTHS_AT.map((m, i) => {
+    const key = `${year}-${String(i + 1).padStart(2, "0")}`;
+    const takenBy = contracts.find((c) => (c.months || []).includes(key));
+    const classes = ["month-chip"];
+    if (contractMonthSelection.has(key)) classes.push("selected");
+    if (takenBy) classes.push("taken");
+    return `<button type="button" class="${classes.join(" ")}" data-month="${key}"
+      title="${takenBy ? "bereits: " + escapeHtml(takenBy.name) : ""}">${m.short}</button>`;
+  }).join("");
+
+  grid.querySelectorAll(".month-chip").forEach((chip) => {
+    chip.addEventListener("click", () => {
+      const key = chip.dataset.month;
+      if (contractMonthSelection.has(key)) contractMonthSelection.delete(key);
+      else contractMonthSelection.add(key);
+      renderContractMonthGrid();
+    });
+  });
+}
+
+function renderContracts() {
+  renderContractYearSelect();
+  renderContractMonthGrid();
+  const container = document.getElementById("contract-list");
+  if (contracts.length === 0) {
+    container.innerHTML = `
+      <div class="empty-state">
+        <div class="icon">📄</div>
+        <p>Noch kein Vertrag angelegt.</p>
+      </div>`;
+    return;
+  }
+  container.innerHTML = contracts.map((c) => {
+    const months = (c.months || []).slice().sort();
+    const label = months.length === 0 ? "keine Monate zugeordnet" : months
+      .map((m) => `${MONTHS_AT[Number(m.slice(5, 7)) - 1].short} ${m.slice(0, 4)}`)
+      .join(", ");
+    const vac = ((Number(c.weeklyHours) * 5) / 12).toFixed(2).replace(".", ",");
+    return `
+      <div class="cc-row" style="align-items:flex-start;">
+        <span class="cc-swatch" style="background:var(--brass); margin-top:4px;"></span>
+        <div class="cc-info">
+          <div class="cc-code">${escapeHtml(c.name)} · ${String(c.weeklyHours).replace(".", ",")} h/Woche</div>
+          <div class="contract-months">${escapeHtml(label)}</div>
+          <div class="contract-months">Urlaub: ${vac} h pro Monat</div>
+        </div>
+        <button class="cc-del" data-contract-id="${c.id}" aria-label="Löschen">✕</button>
+      </div>`;
+  }).join("");
+
+  container.querySelectorAll(".cc-del").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const id = btn.dataset.contractId;
+      const c = contracts.find((x) => x.id === id);
+      if (!confirm(`Vertrag „${c.name}" löschen?`)) return;
+      contracts = contracts.filter((x) => x.id !== id);
+      saveContracts(contracts);
+      renderContracts();
+      toast("Vertrag gelöscht.");
+      deleteContractRemote(id);
+    });
+  });
+}
+
+function addContract(name, weeklyHours, months) {
+  // Ein Monat kann nur zu einem Vertrag gehören – bei Überschneidung gewinnt der neue.
+  contracts.forEach((c) => {
+    c.months = (c.months || []).filter((m) => !months.includes(m));
+  });
+  const contract = { id: uid(), name, weeklyHours, months };
+  contracts.push(contract);
+  saveContracts(contracts);
+  contracts.forEach((c) => pushContract(c));
+  renderContracts();
 }
 
 /* =========================================================
@@ -1737,6 +1886,7 @@ function renderVacations() {
       vacations = vacations.filter((v) => v.id !== id);
       saveVacations(vacations);
       saveLabs(labs);
+      saveContracts(contracts);
       renderVacations();
       toast("Urlaub gelöscht.");
       deleteVacationRemote(id);
@@ -1772,6 +1922,29 @@ function addVacation(startDate, endDate) {
 /* =========================================================
    EXPORT view
    ========================================================= */
+function exportRange() {
+  const from = document.getElementById("export-from").value || null;
+  const to = document.getElementById("export-to").value || null;
+  return { from, to };
+}
+function inExportRange(dateISO, range) {
+  if (range.from && dateISO < range.from) return false;
+  if (range.to && dateISO > range.to) return false;
+  return true;
+}
+function updateExportRangeHint() {
+  const { from, to } = exportRange();
+  const hint = document.getElementById("export-range-hint");
+  if (!from && !to) { hint.textContent = "Alle Einträge werden exportiert."; hint.className = "hint"; return; }
+  if (from && to && to < from) {
+    hint.textContent = "Das Bis-Datum liegt vor dem Von-Datum.";
+    hint.className = "hint warn"; return;
+  }
+  const count = entries.filter((e) => inExportRange(e.date, { from, to })).length;
+  hint.textContent = `${count} Eintrag/Einträge im gewählten Zeitraum.`;
+  hint.className = count > 0 ? "hint ok" : "hint warn";
+}
+
 function renderExportStats() {
   const note = document.getElementById("local-mode-note");
   if (note) {
@@ -1792,6 +1965,7 @@ function renderExportStats() {
     <div class="stat-box"><div class="n">${costCenters.length}</div><div class="l">Kostenstellen</div></div>
     <div class="stat-box"><div class="n">${projects.length}</div><div class="l">Projekte</div></div>
     <div class="stat-box"><div class="n">${labs.length}</div><div class="l">Labore</div></div>
+    <div class="stat-box"><div class="n">${contracts.length}</div><div class="l">Verträge</div></div>
     <div class="stat-box"><div class="n">${fmtHoursDecimal(laborMinutes)} h</div><div class="l">davon Labor</div></div>
   `;
 }
@@ -1808,22 +1982,23 @@ function sanitizeSheetName(name, used) {
    Übersicht (year overview) sheet
    ========================================================= */
 function buildUebersichtSheet(year, monatsblaetterName, monthTotals) {
-  const weeklyHours = profile.weeklyHours || 0;
-  const dailyHours = weeklyHours / 5;
-  const vacationDays = profile.vacationDaysPerYear || 0;
-  const monthlyVacationHours = Number(((vacationDays * dailyHours) / 12).toFixed(2));
+  // Wochenstunden je Monat aus dem zugeordneten Vertrag (Rückfall: Profildaten).
+  const weeklyPerMonth = MONTHS_AT.map((_, i) => weeklyHoursForMonth(year, i));
+  const vacationSollPerMonth = MONTHS_AT.map((_, i) => monthlyVacationHours(year, i));
+  const vacationIstPerMonth = monthTotals.map((m, i) =>
+    Number(((m.vacationDays || 0) * (weeklyPerMonth[i] / 5)).toFixed(2)));
 
   const aoa = [];
   aoa.push([`Jahresübersicht ${year}`]);
   aoa.push(["", ...MONTHS_AT.map((m) => m.short), "", "Σ Arbeitszeiten /a"]);
-  aoa.push(["Stunden pro Woche", ...Array(12).fill(weeklyHours), "", ""]);
+  aoa.push(["Stunden pro Woche", ...weeklyPerMonth, "", ""]);
   aoa.push(["Soll", ...Array(12).fill(0), "", 0]);
   aoa.push(["Ist", ...Array(12).fill(0), "", 0]);
   aoa.push(["Differenz", ...Array(12).fill(""), "", 0]);
   aoa.push([]);
   aoa.push(["", ...MONTHS_AT.map((m) => m.short), "", "Σ Urlaubszeiten /a"]);
-  aoa.push(["Soll", ...Array(12).fill(monthlyVacationHours), "", 0]);
-  aoa.push(["Ist", ...monthTotals.map((m) => Number(((m.vacationDays || 0) * dailyHours).toFixed(2))), "", 0]);
+  aoa.push(["Soll", ...vacationSollPerMonth, "", 0]);
+  aoa.push(["Ist", ...vacationIstPerMonth, "", 0]);
   aoa.push(["Differenz", ...Array(12).fill(""), "", 0]);
 
   const ws = XLSX.utils.aoa_to_sheet(aoa);
@@ -2046,6 +2221,30 @@ function exportExcel() {
   }
   if (entries.length === 0) { toast("Noch keine Einträge zum Exportieren vorhanden."); return; }
 
+  /* Optionaler Zeitraumfilter: Nur Einträge und Urlaube innerhalb von/bis exportieren.
+     exportEntries/exportVacations gelten ab hier für den gesamten Export. */
+  const range = exportRange();
+  if (range.from && range.to && range.to < range.from) {
+    toast("Das Bis-Datum liegt vor dem Von-Datum."); return;
+  }
+  const exportEntries = entries.filter((e) => inExportRange(e.date, range));
+  if (exportEntries.length === 0) {
+    toast("Im gewählten Zeitraum gibt es keine Einträge."); return;
+  }
+  const allEntries = entries;
+  const allVacations = vacations;
+  entries = exportEntries;
+  vacations = vacations.filter((v) => inExportRange(v.startDate, range) || inExportRange(v.endDate, range));
+
+  try {
+    buildWorkbook();
+  } finally {
+    entries = allEntries;   // Ansicht der App bleibt unverändert
+    vacations = allVacations;
+  }
+}
+
+function buildWorkbook() {
   const sorted = [...entries].sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
   const wb = XLSX.utils.book_new();
   const usedNames = new Set();
@@ -2101,7 +2300,12 @@ function exportExcel() {
       const alloc = (e.allocations || []).find((a) => a.costCenterId === cc.id);
       return alloc ? Number((alloc.minutes / 60).toFixed(2)) : 0;
     };
-    const ws = buildBlockSheet(cc.name || cc.code, ccEntries, hoursForCc, hoursForCc);
+    const ws = buildBlockSheet(
+      cc.name || cc.code,
+      ccEntries,
+      hoursForCc,                                            // Zeit ohne Projektzuordnung
+      (e, pa) => Number((pa.minutes / 60).toFixed(2))        // je Projekt SEINE eigene Zeit
+    );
     XLSX.utils.book_append_sheet(wb, ws, sanitizeSheetName(cc.code, usedNames));
   });
 
@@ -2176,7 +2380,7 @@ function exportExcel() {
    Backup import / export (JSON)
    ========================================================= */
 function exportJSON() {
-  const data = { entries, costCenters, projects, labs, vacations, exportedAt: new Date().toISOString() };
+  const data = { entries, costCenters, projects, labs, contracts, vacations, exportedAt: new Date().toISOString() };
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
@@ -2198,11 +2402,13 @@ function importJSON(file) {
       projects = Array.isArray(data.projects) ? data.projects : [];
       vacations = Array.isArray(data.vacations) ? data.vacations : [];
       labs = Array.isArray(data.labs) ? data.labs : [];
+      contracts = Array.isArray(data.contracts) ? data.contracts : [];
       saveEntries(entries);
       saveCostCenters(costCenters);
       saveProjects(projects);
       saveVacations(vacations);
       saveLabs(labs);
+      saveContracts(contracts);
       renderAll();
       toast("Backup importiert.");
       bulkReplaceRemote();
@@ -2216,10 +2422,10 @@ function importJSON(file) {
 function resetAll() {
   if (!confirm("Wirklich ALLE Einträge und Kostenstellen unwiderruflich löschen?")) return;
   if (!confirm("Bist du sicher? Dieser Schritt kann nicht rückgängig gemacht werden.")) return;
-  entries = []; costCenters = []; projects = []; labs = []; vacations = [];
+  entries = []; costCenters = []; projects = []; labs = []; contracts = []; vacations = [];
   timer = { status: "idle" };
   saveEntries(entries); saveCostCenters(costCenters); saveProjects(projects);
-  saveLabs(labs); saveVacations(vacations); saveTimer(timer);
+  saveLabs(labs); saveContracts(contracts); saveVacations(vacations); saveTimer(timer);
   renderAll();
   toast("Alle Daten wurden gelöscht.");
   bulkReplaceRemote();
@@ -2240,7 +2446,7 @@ function switchView(id) {
   if (id === "view-entries") renderEntries();
   if (id === "view-costcenters") renderCostCenters();
   if (id === "view-projects") { renderProjects(); renderLabs(); }
-  if (id === "view-vacation") renderVacations();
+  if (id === "view-vacation") { renderContracts(); renderVacations(); }
   if (id === "view-export") renderExportStats();
 }
 
@@ -2250,6 +2456,7 @@ function renderAll() {
   renderCostCenters();
   renderProjects();
   renderLabs();
+  renderContracts();
   renderVacations();
   renderExportStats();
 }
@@ -2346,31 +2553,55 @@ function wireEvents() {
 
   document.getElementById("btn-export").addEventListener("click", exportExcel);
 
-  document.getElementById("btn-open-profile").addEventListener("click", () => {
+  const profileFields = ["profile-firstname", "profile-lastname", "profile-weekly-hours"];
+  const fillProfileForm = () => {
     document.getElementById("profile-firstname").value = profile.firstName || "";
     document.getElementById("profile-lastname").value = profile.lastName || "";
-    document.getElementById("profile-weekly-hours").value = profile.weeklyHours ?? "";
-    document.getElementById("profile-vacation-days").value = profile.vacationDaysPerYear ?? "";
-    showBackdrop("sheet-profile-backdrop");
-  });
-  document.getElementById("btn-profile-cancel").addEventListener("click", () => hideBackdrop("sheet-profile-backdrop"));
-  document.getElementById("sheet-profile-backdrop").addEventListener("click", (ev) => {
-    if (ev.target.id === "sheet-profile-backdrop") hideBackdrop("sheet-profile-backdrop");
-  });
+    document.getElementById("profile-weekly-hours").value =
+      profile.weeklyHours != null ? String(profile.weeklyHours).replace(".", ",") : "";
+  };
+  fillProfileForm();
   document.getElementById("btn-profile-save").addEventListener("click", () => {
-    const weeklyHoursRaw = document.getElementById("profile-weekly-hours").value;
-    const vacationDaysRaw = document.getElementById("profile-vacation-days").value;
+    const raw = document.getElementById("profile-weekly-hours").value.trim().replace(",", ".");
     profile = {
       firstName: document.getElementById("profile-firstname").value.trim(),
       lastName: document.getElementById("profile-lastname").value.trim(),
-      weeklyHours: weeklyHoursRaw === "" ? null : Number(weeklyHoursRaw),
-      vacationDaysPerYear: vacationDaysRaw === "" ? null : Number(vacationDaysRaw),
+      weeklyHours: raw === "" ? null : Number(raw),
+      vacationDaysPerYear: profile.vacationDaysPerYear ?? null,
     };
     saveProfile(profile);
     pushProfileDebounced(profile);
-    hideBackdrop("sheet-profile-backdrop");
+    renderContracts();
     toast("Profildaten gespeichert.");
   });
+
+  // --- Verträge ---
+  document.getElementById("contract-year").addEventListener("change", () => {
+    contractMonthSelection.clear();
+    renderContractMonthGrid();
+  });
+  document.getElementById("form-contract").addEventListener("submit", (ev) => {
+    ev.preventDefault();
+    const name = document.getElementById("contract-name").value.trim();
+    const hoursRaw = document.getElementById("contract-hours").value.trim().replace(",", ".");
+    const hours = Number(hoursRaw);
+    if (!name || !hoursRaw || Number.isNaN(hours) || hours <= 0) {
+      toast("Bitte Bezeichnung und gültige Wochenstunden angeben."); return;
+    }
+    if (contractMonthSelection.size === 0) {
+      toast("Bitte mindestens einen Monat auswählen."); return;
+    }
+    addContract(name, hours, [...contractMonthSelection]);
+    document.getElementById("form-contract").reset();
+    contractMonthSelection.clear();
+    renderContracts();
+    toast("Vertrag gespeichert.");
+  });
+
+  // --- Export-Zeitraum ---
+  ["export-from", "export-to"].forEach((id) =>
+    document.getElementById(id).addEventListener("input", updateExportRangeHint));
+  updateExportRangeHint();
 
   document.getElementById("btn-export-json").addEventListener("click", exportJSON);
   document.getElementById("btn-import-json").addEventListener("click", () =>
@@ -2390,6 +2621,24 @@ function wireEvents() {
     if (ev.target.id === "sheet-alloc-backdrop") closeAllocSheet();
   });
   document.getElementById("btn-account-close").addEventListener("click", () => hideBackdrop("sheet-account-backdrop"));
+  document.getElementById("btn-force-update").addEventListener("click", async () => {
+    if (!confirm("Zwischenspeicher leeren und App neu laden?\n\nDeine Daten bleiben erhalten.")) return;
+    try {
+      if ("serviceWorker" in navigator) {
+        const regs = await navigator.serviceWorker.getRegistrations();
+        await Promise.all(regs.map((r) => r.unregister()));
+      }
+      if (window.caches) {
+        const keys = await caches.keys();
+        await Promise.all(keys.map((k) => caches.delete(k)));
+      }
+    } catch (err) {
+      console.error("Cache konnte nicht geleert werden:", err);
+    }
+    // Query-Parameter erzwingt einen echten Neuabruf statt eines Treffers im HTTP-Cache.
+    location.replace(location.pathname + "?frisch=" + Date.now());
+  });
+
   document.getElementById("btn-diagnose").addEventListener("click", () => {
     runDiagnostics().catch((err) => {
       const out = document.getElementById("diagnose-output");
@@ -2413,7 +2662,21 @@ function init() {
 
   if ("serviceWorker" in navigator) {
     window.addEventListener("load", () => {
-      navigator.serviceWorker.register("sw.js").catch(() => {});
+      navigator.serviceWorker.register("sw.js").then((reg) => {
+        // Ein wartendes Update sofort aktivieren, damit die neue Version nicht
+        // erst nach mehrmaligem Schliessen der App greift.
+        if (reg.waiting) reg.waiting.postMessage("SKIP_WAITING");
+        reg.addEventListener("updatefound", () => {
+          const sw = reg.installing;
+          if (!sw) return;
+          sw.addEventListener("statechange", () => {
+            if (sw.state === "installed" && navigator.serviceWorker.controller) {
+              sw.postMessage("SKIP_WAITING");
+              toast("Neue Version geladen – bitte einmal neu öffnen.");
+            }
+          });
+        });
+      }).catch(() => {});
     });
   }
 }

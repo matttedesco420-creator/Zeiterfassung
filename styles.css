@@ -448,3 +448,23 @@ a { color: inherit; }
 @media (min-width: 561px) {
   .app-shell { border-left: 1px solid var(--border); border-right: 1px solid var(--border); }
 }
+
+/* ---------- Monatsauswahl für Verträge ---------- */
+.month-grid {
+  display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px;
+}
+.month-chip {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+  padding: 9px 2px; font-size: 12px; font-weight: 600; color: var(--text-soft);
+  cursor: pointer; text-align: center; -webkit-tap-highlight-color: transparent;
+}
+.month-chip.selected {
+  background: var(--ink); border-color: var(--ink); color: #fff;
+}
+.month-chip.taken {
+  border-style: dashed; color: var(--text-faint);
+}
+.month-chip:active { transform: scale(0.96); }
+.contract-months {
+  font-size: 12px; color: var(--text-soft); margin-top: 3px;
+}
