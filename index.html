@@ -182,7 +182,8 @@
 
     <div class="section-label mb-0">Profildaten</div>
     <p class="hint" style="margin:6px 2px 14px;">
-      Der Name erscheint im Kopf jedes Monatsblatts im Excel-Export.
+      Der Name erscheint im Kopf jedes Monatsblatts im Excel-Export. Die Wochenstunden
+      ergeben sich aus den Verträgen weiter unten.
     </p>
     <div class="field-row">
       <div class="field">
@@ -193,10 +194,6 @@
         <label for="profile-lastname">Nachname</label>
         <input type="text" id="profile-lastname" placeholder="z. B. Mustermann" />
       </div>
-    </div>
-    <div class="field">
-      <label for="profile-weekly-hours">Standard-Wochenstunden (falls kein Vertrag zugeordnet)</label>
-      <input type="text" inputmode="decimal" id="profile-weekly-hours" placeholder="z. B. 38,5" />
     </div>
     <button type="button" class="btn btn-secondary btn-block" id="btn-profile-save">
       Profildaten speichern
@@ -235,6 +232,16 @@
 
     <div class="spacer-24"></div>
     <div id="contract-list"></div>
+
+    <div class="section-label">Urlaubsanspruch pro Monat</div>
+    <p class="hint" style="margin:6px 2px 10px;">
+      Errechnet sich je Monat aus dem hinterlegten Vertrag: Wochenstunden × 5/12.
+    </p>
+    <div class="field">
+      <label for="vac-overview-year">Jahr</label>
+      <select id="vac-overview-year"></select>
+    </div>
+    <div id="vacation-overview"></div>
 
     <div class="section-label">Urlaub</div>
     <p class="hint" style="margin:6px 2px 14px;">

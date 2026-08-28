@@ -218,8 +218,14 @@ function saveContracts(list) { localStorage.setItem(K.contracts, JSON.stringify(
 function weeklyHoursForMonth(year, monthIndex) {
   const key = `${year}-${String(monthIndex + 1).padStart(2, "0")}`;
   const contract = contracts.find((c) => (c.months || []).includes(key));
-  if (contract && contract.weeklyHours != null) return Number(contract.weeklyHours);
-  return profile.weeklyHours != null ? Number(profile.weeklyHours) : 0;
+  return contract && contract.weeklyHours != null ? Number(contract.weeklyHours) : 0;
+}
+/* Tagesstunden eines Monats (Arbeitswoche Mo–Fr). */
+function dailyHoursForMonth(year, monthIndex) {
+  return weeklyHoursForMonth(year, monthIndex) / 5;
+}
+function dailyHoursForDate(dateISO) {
+  return dailyHoursForMonth(Number(dateISO.slice(0, 4)), Number(dateISO.slice(5, 7)) - 1);
 }
 
 /* Urlaubs-Soll pro Monat = Wochenstunden x 5/12 (entspricht 25 Urlaubstagen im Jahr). */
@@ -341,7 +347,7 @@ let flow = { mode: null, editingId: null, draft: null }; // shared draft used by
    real credentials; otherwise the app stays purely local, exactly
    as before).
    ========================================================= */
-const APP_VERSION = "v19 (Verträge + Zeitraum-Export)";
+const APP_VERSION = "v21 (Urlaub in Stunden)";
 
 const SB = (window.SUPABASE_CONFIG && window.SUPABASE_CONFIG.url && window.SUPABASE_CONFIG.anonKey)
   ? supabase.createClient(window.SUPABASE_CONFIG.url, window.SUPABASE_CONFIG.anonKey, {
@@ -1833,6 +1839,7 @@ function renderContracts() {
       contracts = contracts.filter((x) => x.id !== id);
       saveContracts(contracts);
       renderContracts();
+      renderVacationOverview();
       toast("Vertrag gelöscht.");
       deleteContractRemote(id);
     });
@@ -1851,6 +1858,54 @@ function addContract(name, weeklyHours, months) {
   renderContracts();
 }
 
+/* Urlaubsanspruch je Monat: Wochenstunden aus dem Vertrag x 5/12,
+   daneben der bereits genommene Urlaub aus den eingetragenen Zeiträumen. */
+function renderVacationOverview() {
+  const sel = document.getElementById("vac-overview-year");
+  if (sel.options.length === 0 || sel.dataset.years !== contractYears().join(",")) {
+    const prev = sel.value || String(new Date().getFullYear());
+    sel.innerHTML = contractYears().map((y) => `<option value="${y}">${y}</option>`).join("");
+    sel.value = contractYears().includes(Number(prev)) ? prev : String(new Date().getFullYear());
+    sel.dataset.years = contractYears().join(",");
+  }
+  const year = Number(sel.value);
+  const taken = vacationDateSet();
+
+  let sumSoll = 0, sumIst = 0;
+  const rows = MONTHS_AT.map((m, i) => {
+    const soll = monthlyVacationHours(year, i);
+    const prefix = `${year}-${String(i + 1).padStart(2, "0")}`;
+    const days = [...taken].filter((d) => d.startsWith(prefix)).length;
+    const ist = Number((days * dailyHoursForMonth(year, i)).toFixed(2));
+    sumSoll += soll; sumIst += ist;
+    const contract = contracts.find((c) => (c.months || []).includes(prefix));
+    return `
+      <div class="vac-row">
+        <span class="vac-month">${m.short}</span>
+        <span class="vac-contract">${contract ? escapeHtml(contract.name) : "<i>kein Vertrag</i>"}</span>
+        <span class="vac-num">${fmtHoursDecimal(soll * 60)} h</span>
+        <span class="vac-num ${ist > 0 ? "used" : ""}">${fmtHoursDecimal(ist * 60)} h</span>
+      </div>`;
+  }).join("");
+
+  document.getElementById("vacation-overview").innerHTML = `
+    <div class="vac-table">
+      <div class="vac-row vac-head">
+        <span class="vac-month">Monat</span>
+        <span class="vac-contract">Vertrag</span>
+        <span class="vac-num">Anspruch</span>
+        <span class="vac-num">genommen</span>
+      </div>
+      ${rows}
+      <div class="vac-row vac-total">
+        <span class="vac-month">Σ</span>
+        <span class="vac-contract">Jahr ${year}</span>
+        <span class="vac-num">${fmtHoursDecimal(sumSoll * 60)} h</span>
+        <span class="vac-num">${fmtHoursDecimal(sumIst * 60)} h</span>
+      </div>
+    </div>`;
+}
+
 /* =========================================================
    VACATION view
    ========================================================= */
@@ -1864,16 +1919,44 @@ function renderVacations() {
       </div>`;
     return;
   }
+
+  // Genommene Stunden je Monat über ALLE Urlaube – Basis für den Restanspruch.
+  const takenByMonth = {};
+  vacations.forEach((v) => {
+    vacationWeekdaysInRange(v.startDate, v.endDate).forEach((d) => {
+      const key = d.slice(0, 7);
+      takenByMonth[key] = (takenByMonth[key] || 0) + dailyHoursForDate(d);
+    });
+  });
+
   const sorted = [...vacations].sort((a, b) => (a.startDate < b.startDate ? 1 : -1));
   container.innerHTML = sorted.map((v) => {
-    const days = vacationWeekdaysInRange(v.startDate, v.endDate).length;
+    const days = vacationWeekdaysInRange(v.startDate, v.endDate);
+    const hours = days.reduce((sum, d) => sum + dailyHoursForDate(d), 0);
     const sameDay = v.startDate === v.endDate;
+
+    // Ein Zeitraum kann über Monatsgrenzen gehen – Restanspruch je betroffenem Monat.
+    const monthsTouched = [...new Set(days.map((d) => d.slice(0, 7)))];
+    const remainingLines = monthsTouched.map((key) => {
+      const y = Number(key.slice(0, 4)), mi = Number(key.slice(5, 7)) - 1;
+      const entitlement = monthlyVacationHours(y, mi);
+      if (entitlement <= 0) {
+        return `${MONTHS_AT[mi].short} ${y}: kein Vertrag hinterlegt`;
+      }
+      const rest = entitlement - (takenByMonth[key] || 0);
+      const restTxt = rest < 0
+        ? `${fmtHoursDecimal(-rest * 60)} h über dem Anspruch`
+        : `noch ${fmtHoursDecimal(rest * 60)} h frei`;
+      return `${MONTHS_AT[mi].short} ${y}: ${restTxt} von ${fmtHoursDecimal(entitlement * 60)} h`;
+    });
+
     return `
-      <div class="cc-row">
-        <span class="cc-swatch" style="background:var(--teal);"></span>
+      <div class="cc-row" style="align-items:flex-start;">
+        <span class="cc-swatch" style="background:var(--teal); margin-top:4px;"></span>
         <div class="cc-info">
           <div class="cc-code">${sameDay ? fmtDatePlain(v.startDate) : `${fmtDatePlain(v.startDate)} – ${fmtDatePlain(v.endDate)}`}</div>
-          <div class="cc-name">${days} Werktag${days === 1 ? "" : "e"}</div>
+          <div class="cc-name">${days.length} Werktag${days.length === 1 ? "" : "e"} · ${fmtHoursDecimal(hours * 60)} h</div>
+          ${remainingLines.map((l) => `<div class="contract-months">${escapeHtml(l)}</div>`).join("")}
         </div>
         <button class="cc-del" data-vacation-id="${v.id}" aria-label="Löschen">✕</button>
       </div>`;
@@ -1888,6 +1971,7 @@ function renderVacations() {
       saveLabs(labs);
       saveContracts(contracts);
       renderVacations();
+      renderVacationOverview();
       toast("Urlaub gelöscht.");
       deleteVacationRemote(id);
     });
@@ -1904,11 +1988,20 @@ function updateVacationHint() {
     hint.className = "hint warn";
     return;
   }
-  const days = vacationWeekdaysInRange(start, end).length;
-  hint.textContent = days === 0
-    ? "Dieser Zeitraum enthält nur Wochenendtage – es werden keine Urlaubstage gezählt."
-    : `${days} Werktag${days === 1 ? "" : "e"} Urlaub`;
-  hint.className = days === 0 ? "hint warn" : "hint ok";
+  const dayList = vacationWeekdaysInRange(start, end);
+  if (dayList.length === 0) {
+    hint.textContent = "Dieser Zeitraum enthält nur Wochenendtage – es werden keine Urlaubstage gezählt.";
+    hint.className = "hint warn";
+    return;
+  }
+  const hours = dayList.reduce((sum, d) => sum + dailyHoursForDate(d), 0);
+  if (hours === 0) {
+    hint.textContent = `${dayList.length} Werktag${dayList.length === 1 ? "" : "e"} – für diesen Zeitraum ist noch kein Vertrag hinterlegt.`;
+    hint.className = "hint warn";
+    return;
+  }
+  hint.textContent = `${dayList.length} Werktag${dayList.length === 1 ? "" : "e"} · ${fmtHoursDecimal(hours * 60)} h Urlaub`;
+  hint.className = "hint ok";
 }
 
 function addVacation(startDate, endDate) {
@@ -1916,6 +2009,7 @@ function addVacation(startDate, endDate) {
   vacations.push(v);
   saveVacations(vacations);
   renderVacations();
+  renderVacationOverview();
   pushVacation(v);
 }
 
@@ -1987,6 +2081,7 @@ function buildUebersichtSheet(year, monatsblaetterName, monthTotals) {
   const vacationSollPerMonth = MONTHS_AT.map((_, i) => monthlyVacationHours(year, i));
   const vacationIstPerMonth = monthTotals.map((m, i) =>
     Number(((m.vacationDays || 0) * (weeklyPerMonth[i] / 5)).toFixed(2)));
+  // (weeklyPerMonth stammt aus den Verträgen; ohne Vertrag ist der Monat 0.)
 
   const aoa = [];
   aoa.push([`Jahresübersicht ${year}`]);
@@ -2446,7 +2541,7 @@ function switchView(id) {
   if (id === "view-entries") renderEntries();
   if (id === "view-costcenters") renderCostCenters();
   if (id === "view-projects") { renderProjects(); renderLabs(); }
-  if (id === "view-vacation") { renderContracts(); renderVacations(); }
+  if (id === "view-vacation") { renderContracts(); renderVacationOverview(); renderVacations(); }
   if (id === "view-export") renderExportStats();
 }
 
@@ -2457,6 +2552,7 @@ function renderAll() {
   renderProjects();
   renderLabs();
   renderContracts();
+  renderVacationOverview();
   renderVacations();
   renderExportStats();
 }
@@ -2553,29 +2649,24 @@ function wireEvents() {
 
   document.getElementById("btn-export").addEventListener("click", exportExcel);
 
-  const profileFields = ["profile-firstname", "profile-lastname", "profile-weekly-hours"];
-  const fillProfileForm = () => {
-    document.getElementById("profile-firstname").value = profile.firstName || "";
-    document.getElementById("profile-lastname").value = profile.lastName || "";
-    document.getElementById("profile-weekly-hours").value =
-      profile.weeklyHours != null ? String(profile.weeklyHours).replace(".", ",") : "";
-  };
-  fillProfileForm();
+  document.getElementById("profile-firstname").value = profile.firstName || "";
+  document.getElementById("profile-lastname").value = profile.lastName || "";
   document.getElementById("btn-profile-save").addEventListener("click", () => {
-    const raw = document.getElementById("profile-weekly-hours").value.trim().replace(",", ".");
     profile = {
       firstName: document.getElementById("profile-firstname").value.trim(),
       lastName: document.getElementById("profile-lastname").value.trim(),
-      weeklyHours: raw === "" ? null : Number(raw),
-      vacationDaysPerYear: profile.vacationDaysPerYear ?? null,
+      weeklyHours: null,
+      vacationDaysPerYear: null,
     };
     saveProfile(profile);
     pushProfileDebounced(profile);
     renderContracts();
+    renderVacationOverview();
     toast("Profildaten gespeichert.");
   });
 
   // --- Verträge ---
+  document.getElementById("vac-overview-year").addEventListener("change", renderVacationOverview);
   document.getElementById("contract-year").addEventListener("change", () => {
     contractMonthSelection.clear();
     renderContractMonthGrid();
@@ -2595,6 +2686,7 @@ function wireEvents() {
     document.getElementById("form-contract").reset();
     contractMonthSelection.clear();
     renderContracts();
+    renderVacationOverview();
     toast("Vertrag gespeichert.");
   });
 

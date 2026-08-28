@@ -468,3 +468,29 @@ a { color: inherit; }
 .contract-months {
   font-size: 12px; color: var(--text-soft); margin-top: 3px;
 }
+
+/* ---------- Urlaubsanspruch pro Monat ---------- */
+.vac-table {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); overflow: hidden;
+}
+.vac-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 9px 12px; border-bottom: 1px solid var(--border); font-size: 13px;
+}
+.vac-row:last-child { border-bottom: none; }
+.vac-head, .vac-total {
+  background: #fafafb; font-weight: 700; font-size: 11.5px;
+  text-transform: uppercase; letter-spacing: 0.03em; color: var(--text-soft);
+}
+.vac-total { text-transform: none; font-size: 13px; color: var(--text); }
+.vac-month { flex: 0 0 34px; font-weight: 700; }
+.vac-contract {
+  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--text-soft);
+}
+.vac-num {
+  flex: 0 0 62px; text-align: right;
+  font-family: var(--font-mono); font-variant-numeric: tabular-nums;
+}
+.vac-num.used { color: var(--teal); font-weight: 600; }
