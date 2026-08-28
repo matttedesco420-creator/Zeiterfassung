@@ -347,7 +347,7 @@ let flow = { mode: null, editingId: null, draft: null }; // shared draft used by
    real credentials; otherwise the app stays purely local, exactly
    as before).
    ========================================================= */
-const APP_VERSION = "v31 (Laborblock-Fix)";
+const APP_VERSION = "v32 (Projektzuordnung)";
 
 const SB = (window.SUPABASE_CONFIG && window.SUPABASE_CONFIG.url && window.SUPABASE_CONFIG.anonKey)
   ? supabase.createClient(window.SUPABASE_CONFIG.url, window.SUPABASE_CONFIG.anonKey, {
@@ -753,7 +753,7 @@ async function onLoggedIn() {
     }
   }
   dedupeGeneralProjects();
-  ensureGeneralProjects();
+  await ensureGeneralProjects();
   if (!appInitialized) { init(); appInitialized = true; }
   else { renderAll(); renderTimer(); renderTopbarDate(); }
   subscribeRealtime();
@@ -1692,6 +1692,7 @@ function addCostCenter(code, name) {
   // was keinem konkreten Projekt zuzuordnen ist (auch Laborzeit).
   addProject("ALLG", "Allgemein", cc.id);
   renderCostCenters();
+  renderProjects();
 }
 
 /* Ergänzt fehlende "Allgemein"-Projekte bei bereits bestehenden Kostenstellen. */
@@ -1732,23 +1733,25 @@ function dedupeGeneralProjects() {
   return changed;
 }
 
-function ensureGeneralProjects() {
-  let added = false;
+async function ensureGeneralProjects() {
+  const fresh = [];
   costCenters.forEach((cc) => {
     const hasGeneral = projects.some((p) => p.costCenterId === cc.id && isGeneralProject(p));
     if (!hasGeneral) {
-      projects.push({
+      const pr = {
         id: uid(), code: "ALLG", name: "Allgemein",
-        costCenterId: cc.id, colorIndex: projects.length,
-      });
-      added = true;
+        costCenterId: cc.id, colorIndex: projects.length + fresh.length,
+      };
+      projects.push(pr);
+      fresh.push(pr);
     }
   });
-  if (added) {
-    saveProjects(projects);
-    projects.filter((p) => p.code === "ALLG").forEach((p) => pushProject(p));
-  }
-  return added;
+  if (fresh.length === 0) return false;
+  saveProjects(projects);
+  /* Auf das Hochladen WARTEN: sonst kann eine zwischendurch eintreffende
+     Synchronisierung das noch nicht gespeicherte Projekt wieder entfernen. */
+  await Promise.all(fresh.map((pr) => pushProject(pr)));
+  return true;
 }
 
 /* =========================================================
@@ -2435,7 +2438,7 @@ function buildMonatsblaetterSheet(year, overviewSheetName) {
    project, "Allgemein" first for unassigned time, blocks placed
    next to each other with each keeping its own row count.
    ========================================================= */
-function buildBlockSheet(titleLabel, relevantEntries, generalHoursFn, projectHoursFn) {
+function buildBlockSheet(titleLabel, relevantEntries, generalHoursFn, projectHoursFn, costCenterId) {
   const noneRows = [];
   const projectRowsMap = new Map();
 
@@ -2449,7 +2452,13 @@ function buildBlockSheet(titleLabel, relevantEntries, generalHoursFn, projectHou
   };
 
   relevantEntries.forEach((e) => {
-    const projAllocs = e.projectAllocations || [];
+    /* Nur Projekte DIESER Kostenstelle. Sonst landet z. B. "VoluTrack" (Kostenstelle
+       Simon) auch im Blatt von Thomas, sobald ein Eintrag beide Kostenstellen berührt. */
+    const projAllocs = (e.projectAllocations || []).filter((pa) => {
+      if (!costCenterId) return true;
+      const pr = projects.find((p) => p.id === pa.projectId);
+      return pr && pr.costCenterId === costCenterId;
+    });
     if (projAllocs.length === 0) {
       noneRows.push([fmtDatePlain(e.date), generalHoursFn(e), laborFor(e, null), ""]);
     } else {
@@ -2463,9 +2472,11 @@ function buildBlockSheet(titleLabel, relevantEntries, generalHoursFn, projectHou
 
   const blockDefs = [];
   if (noneRows.length > 0) blockDefs.push({ label: "Allgemein", rows: noneRows });
-  projects.forEach((pr) => {
-    if (projectRowsMap.has(pr.id)) blockDefs.push({ label: pr.name, rows: projectRowsMap.get(pr.id) });
-  });
+  projects
+    .filter((pr) => !costCenterId || pr.costCenterId === costCenterId)
+    .forEach((pr) => {
+      if (projectRowsMap.has(pr.id)) blockDefs.push({ label: pr.name, rows: projectRowsMap.get(pr.id) });
+    });
   if (blockDefs.length === 0) blockDefs.push({ label: "Allgemein", rows: [] });
 
   blockDefs.forEach((b) => {
@@ -2604,7 +2615,8 @@ function buildWorkbook() {
       cc.name || cc.code,
       ccEntries,
       hoursForCc,                                            // Zeit ohne Projektzuordnung
-      (e, pa) => Number((pa.minutes / 60).toFixed(2))        // je Projekt SEINE eigene Zeit
+      (e, pa) => Number((pa.minutes / 60).toFixed(2)),       // je Projekt SEINE eigene Zeit
+      cc.id                                                  // nur Projekte dieser Kostenstelle
     );
     XLSX.utils.book_append_sheet(wb, ws, sanitizeSheetName(cc.code, usedNames));
   });
