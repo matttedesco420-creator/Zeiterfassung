@@ -1,5 +1,5 @@
 // Version bei jeder Änderung hochzählen.
-const CACHE_NAME = "arbeitszeit-tracker-v33";
+const CACHE_NAME = "arbeitszeit-tracker-v34";
 
 // Nur Offline-Reserve. Eigene Dateien werden NICHT bevorzugt aus dem Cache
 // ausgeliefert, sondern immer zuerst aus dem Netz geholt (siehe fetch-Handler).
@@ -15,7 +15,8 @@ const PRECACHE_URLS = [
   "./icons/icon-maskable-512.png",
   "./icons/apple-touch-icon.png",
   "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js",
-  "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"
+  "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2",
+  "https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"
 ];
 
 self.addEventListener("install", (event) => {

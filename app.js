@@ -347,7 +347,7 @@ let flow = { mode: null, editingId: null, draft: null }; // shared draft used by
    real credentials; otherwise the app stays purely local, exactly
    as before).
    ========================================================= */
-const APP_VERSION = "v33 (Übersicht-Werte)";
+const APP_VERSION = "v34 (Excel-Design)";
 
 const SB = (window.SUPABASE_CONFIG && window.SUPABASE_CONFIG.url && window.SUPABASE_CONFIG.anonKey)
   ? supabase.createClient(window.SUPABASE_CONFIG.url, window.SUPABASE_CONFIG.anonKey, {
@@ -2347,6 +2347,7 @@ function buildMonatsblaetterSheet(year, overviewSheetName) {
   const formulaPatches = [];
   const boldCells = [];
   const monthTotals = [];
+  const blockPositions = [];   // 1-basierte Zeilen für die Formatierung
   const fullName = [profile.firstName, profile.lastName].filter(Boolean).join(" ");
   const vacationDays = vacationDateSet();
   let cursor = 0; // 0-indexed row cursor
@@ -2429,6 +2430,7 @@ function buildMonatsblaetterSheet(year, overviewSheetName) {
       { s: { r: blockStart + 3, c: 8 }, e: { r: blockStart + 4, c: 8 } },
     );
 
+    blockPositions.push({ start: blockStart + 1, dataStart: dataStart + 1, dataEnd: dataEnd + 1 });
     monthTotals.push({
       sollAddr: XLSX.utils.encode_cell({ r: blockStart, c: 1 }),
       istAddr: XLSX.utils.encode_cell({ r: blockStart + 1, c: 1 }),
@@ -2454,7 +2456,7 @@ function buildMonatsblaetterSheet(year, overviewSheetName) {
     { wch: 6 }, { wch: 12 }, { wch: 9 }, { wch: 9 }, { wch: 8 }, { wch: 8 },
     { wch: 13 }, { wch: 16 }, { wch: 9 },
   ];
-  return { ws, monthTotals };
+  return { ws, monthTotals, blockPositions };
 }
 
 /* =========================================================
@@ -2463,6 +2465,221 @@ function buildMonatsblaetterSheet(year, overviewSheetName) {
    project, "Allgemein" first for unassigned time, blocks placed
    next to each other with each keeping its own row count.
    ========================================================= */
+
+/* =========================================================
+   Excel-Formatierung nach der vom Nutzer gelieferten Vorlage.
+   SheetJS (freie Version) schreibt keine Zellformate, deshalb wird die fertige
+   Mappe hier nach ExcelJS übertragen und dort gestaltet.
+   Farben stammen 1:1 aus der Vorlage (Office-Standardtheme mit Tönung).
+   ========================================================= */
+const TPL = {
+  blue:       "FFA5B6CB",  // Kopfzeilen Monatsblätter / Kostenstellen
+  blueLight:  "FFD2DBE5",  // Titelzelle Übersicht
+  orange:     "FFFAC090",  // Monatsleisten, Labor-Titel, Basisspalten Gesamt
+  orangeLight:"FFFCD5B5",  // Projektspalten Gesamt
+  green:      "FFC3D69B",  // Differenz-Summen
+  steel:      "FF95B3D7",  // Kostenstellenspalten Gesamt
+};
+const THIN = { style: "thin" };
+const DOUBLE = { style: "double" };
+
+function fill(cell, argb) {
+  cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb } };
+}
+function borders(cell, spec) {
+  cell.border = Object.assign({}, cell.border, spec);
+}
+
+/* Überträgt die SheetJS-Mappe nach ExcelJS (Werte, Formeln, Zahlenformate, Breiten). */
+function transferToExcelJS(wb, out) {
+  wb.SheetNames.forEach((name) => {
+    const src = wb.Sheets[name];
+    const sheet = out.addWorksheet(name);
+    if (src["!cols"]) {
+      sheet.columns = src["!cols"].map((c) => ({ width: c && c.wch ? c.wch : 10 }));
+    }
+    if (src["!ref"]) {
+      const range = XLSX.utils.decode_range(src["!ref"]);
+      for (let r = range.s.r; r <= range.e.r; r++) {
+        for (let c = range.s.c; c <= range.e.c; c++) {
+          const src_cell = src[XLSX.utils.encode_cell({ r, c })];
+          if (!src_cell) continue;
+          const cell = sheet.getCell(r + 1, c + 1);
+          if (src_cell.f) cell.value = { formula: src_cell.f, result: src_cell.v };
+          else if (src_cell.v !== undefined && src_cell.v !== "") cell.value = src_cell.v;
+          if (src_cell.z) cell.numFmt = src_cell.z;
+        }
+      }
+    }
+    (src["!merges"] || []).forEach((m) => {
+      try { sheet.mergeCells(m.s.r + 1, m.s.c + 1, m.e.r + 1, m.e.c + 1); } catch { /* Überschneidung ignorieren */ }
+    });
+  });
+}
+
+function styleUebersicht(sheet) {
+  const lastCol = 15; // bis Spalte O
+  sheet.getCell("A1").font = { bold: true, size: 12 };
+  fill(sheet.getCell("A1"), TPL.blueLight);
+  borders(sheet.getCell("A1"), { right: THIN });
+
+  // Monatsleisten (Zeile 2 = Arbeitszeit, Zeile 8 = Urlaub)
+  [2, 8].forEach((row) => {
+    for (let c = 1; c <= 13; c++) {
+      const cell = sheet.getCell(row, c);
+      fill(cell, TPL.orange);
+      cell.font = { bold: true, size: 12 };
+      cell.alignment = { horizontal: "center" };
+      borders(cell, { top: THIN, bottom: THIN, left: c === 2 ? THIN : undefined, right: c === 1 ? THIN : undefined });
+    }
+    [14, 15].forEach((c) => {
+      const cell = sheet.getCell(row, c);
+      cell.font = { bold: true, size: 12 };
+      cell.alignment = { horizontal: "center" };
+      borders(cell, { top: THIN, bottom: THIN, left: c === 15 ? THIN : undefined, right: c === 14 ? THIN : undefined });
+    });
+  });
+
+  for (let r = 1; r <= 11; r++) {
+    borders(sheet.getCell(r, 1), { right: THIN });          // Trennlinie nach Spalte A
+    if (r >= 3) borders(sheet.getCell(r, 15), { left: THIN }); // Trennlinie vor Summenspalte
+    for (let c = 1; c <= lastCol; c++) sheet.getCell(r, c).alignment = { horizontal: "center" };
+  }
+  sheet.getCell(3, 1).alignment = { horizontal: "left" };
+  ["A3", "A4", "A5", "A6", "A9", "A10", "A11"].forEach((a) => {
+    sheet.getCell(a).alignment = { horizontal: "left" };
+    sheet.getCell(a).font = { bold: true, size: 12 };
+  });
+  // Differenz-Jahressummen hervorheben
+  ["O6", "O11"].forEach((a) => { fill(sheet.getCell(a), TPL.green); borders(sheet.getCell(a), { left: THIN }); });
+}
+
+function styleMonatsblaetter(sheet, blockStarts) {
+  blockStarts.forEach(({ start, dataStart, dataEnd }) => {
+    // SOLL/IST-Kopf
+    for (let r = start; r <= start + 1; r++) {
+      for (let c = 1; c <= 9; c++) {
+        const cell = sheet.getCell(r, c);
+        fill(cell, TPL.blue);
+        cell.alignment = { horizontal: "center" };
+        borders(cell, {
+          top: r === start ? THIN : undefined,
+          bottom: r === start + 1 ? THIN : undefined,
+          left: c === 1 ? THIN : undefined,
+          right: c === 9 ? THIN : undefined,
+        });
+      }
+      sheet.getCell(r, 1).font = { bold: true, size: 12 };
+      sheet.getCell(r, 4).font = { bold: true, size: 12 };
+    }
+    // Tabellenkopf (zwei Zeilen) mit doppelter Unterlinie
+    for (let r = start + 3; r <= start + 4; r++) {
+      for (let c = 1; c <= 9; c++) {
+        const cell = sheet.getCell(r, c);
+        cell.font = { bold: true, size: 12 };
+        cell.alignment = { horizontal: "center" };
+        borders(cell, {
+          left: THIN, right: THIN,
+          top: r === start + 3 ? THIN : undefined,
+          bottom: r === start + 4 ? DOUBLE : undefined,
+        });
+      }
+    }
+    // Datenzeilen
+    for (let r = dataStart; r <= dataEnd; r++) {
+      for (let c = 1; c <= 9; c++) {
+        const cell = sheet.getCell(r, c);
+        borders(cell, { left: THIN, right: THIN, bottom: THIN });
+        if (c !== 8) cell.alignment = { horizontal: "center" };
+      }
+    }
+  });
+}
+
+function styleBlockSheet(sheet, blockCount, colsPerBlock, headerRow, titleFillColor) {
+  fill(sheet.getCell("A1"), titleFillColor);
+  sheet.getCell("A1").font = { bold: true, size: 12 };
+  const totalCols = blockCount * colsPerBlock + (blockCount - 1);
+  for (let b = 0; b < blockCount; b++) {
+    const first = b * (colsPerBlock + 1) + 1;
+    const last = first + colsPerBlock - 1;
+    // Blockbezeichnung + Summe
+    for (let c = first; c <= last; c++) {
+      sheet.getCell(2, c).font = { bold: true, size: 12 };
+      const head = sheet.getCell(headerRow, c);
+      head.font = { bold: true, size: 12 };
+      borders(head, { bottom: DOUBLE });
+    }
+    // senkrechte Trennlinien um jeden Block
+    const lastRow = Math.max(sheet.rowCount, headerRow);
+    for (let r = 2; r <= lastRow; r++) {
+      borders(sheet.getCell(r, first), { left: THIN });
+      borders(sheet.getCell(r, last), { right: THIN });
+    }
+  }
+  return totalCols;
+}
+
+function styleGesamt(sheet, counts) {
+  const { base, ccCount, prCount, labCount } = counts;
+  let col = 1;
+  const paint = (n, color) => {
+    for (let i = 0; i < n; i++, col++) {
+      const cell = sheet.getCell(1, col);
+      fill(cell, color);
+      cell.font = { bold: true, size: 12 };
+      borders(cell, { left: THIN, right: THIN, bottom: DOUBLE });
+    }
+  };
+  paint(base, TPL.orange);
+  paint(ccCount, TPL.steel);
+  paint(prCount, TPL.orangeLight);
+  paint(labCount, TPL.blue);
+  const total = base + ccCount + prCount + labCount;
+  for (let r = 2; r <= sheet.rowCount; r++) {
+    for (let c = 1; c <= total; c++) borders(sheet.getCell(r, c), { left: THIN, right: THIN });
+  }
+}
+
+/* Erzeugt die formatierte Datei und lädt sie herunter. */
+async function writeStyledWorkbook(wb, filename, layout) {
+  if (typeof ExcelJS === "undefined") {
+    XLSX.writeFile(wb, filename, { cellStyles: true });   // Rückfallebene ohne Formatierung
+    return;
+  }
+  const out = new ExcelJS.Workbook();
+  out.calcProperties = { fullCalcOnLoad: true };
+  transferToExcelJS(wb, out);
+
+  out.eachSheet((sheet) => {
+    sheet.eachRow((row) => row.eachCell((cell) => {
+      cell.font = Object.assign({ name: "Calibri", size: 12 }, cell.font || {});
+    }));
+    const name = sheet.name;
+    if (name.startsWith("Übersicht")) styleUebersicht(sheet);
+    else if (name.startsWith("Monatsblätter")) styleMonatsblaetter(sheet, layout.monthBlocks[name] || []);
+    else if (name === "Gesamt") styleGesamt(sheet, layout.gesamt);
+    else if (name === "Labor") styleBlockSheet(sheet, layout.laborBlocks, 3, 3, TPL.orange);
+    else if (layout.ccSheets[name]) styleBlockSheet(sheet, layout.ccSheets[name], 4, 3, TPL.blue);
+  });
+
+  const buffer = await out.xlsx.writeBuffer();
+  const blob = new Blob([buffer], {
+    type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); a.remove();
+  URL.revokeObjectURL(url);
+}
+
+/* Anzahl der 4-Spalten-Blöcke eines Kostenstellen-Blatts (für die Formatierung). */
+function countBlocksIn(ws) {
+  if (!ws["!cols"]) return 1;
+  return Math.max(1, Math.round((ws["!cols"].length + 1) / 5));
+}
+
 function buildBlockSheet(titleLabel, relevantEntries, generalHoursFn, projectHoursFn, costCenterId) {
   const noneRows = [];
   const projectRowsMap = new Map();
@@ -2584,6 +2801,8 @@ function buildWorkbook() {
   const sorted = [...entries].sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
   const wb = XLSX.utils.book_new();
   const usedNames = new Set();
+  // Positionsangaben, die die Formatierung später braucht
+  const layout = { monthBlocks: {}, ccSheets: {}, laborBlocks: 1, gesamt: {} };
 
   // ---- Übersicht + Monatsblätter (one block per calendar year present in the data) ----
   const years = [...new Set(entries.map((e) => e.date.slice(0, 4)))].sort();
@@ -2593,7 +2812,8 @@ function buildWorkbook() {
     const monatsblaetterName = sanitizeSheetName("Monatsblätter" + suffix, usedNames);
     const overviewName = sanitizeSheetName("Übersicht" + suffix, usedNames);
 
-    const { ws: wsMonths, monthTotals } = buildMonatsblaetterSheet(Number(year), overviewName);
+    const { ws: wsMonths, monthTotals, blockPositions } = buildMonatsblaetterSheet(Number(year), overviewName);
+    layout.monthBlocks[monatsblaetterName] = blockPositions;
     const wsOverview = buildUebersichtSheet(year, monatsblaetterName, monthTotals);
 
     XLSX.utils.book_append_sheet(wb, wsOverview, overviewName);
@@ -2604,7 +2824,12 @@ function buildWorkbook() {
   const header = ["Datum", "Beginn der Arbeit", "Ende der Arbeit", "Pause Start", "Pause Ende",
     "Gesamtarbeitszeit (h)", "Tätigkeit",
     ...costCenters.map((c) => c.code),
-    ...projects.map((p) => `${p.code} (Projekt)`),
+    /* Projektspalten mit Kostenstellen-Kürzel: "ALLG" allein ist mehrdeutig,
+       weil jede Kostenstelle ein eigenes Allgemein-Projekt hat. */
+    ...projects.map((p) => {
+      const cc = costCenters.find((c) => c.id === p.costCenterId);
+      return `${cc ? cc.code + " · " : ""}${p.code} (Projekt)`;
+    }),
     ...labs.map((l) => `${l.code} (Labor)`)];
   const rows = sorted.map((e) => {
     const row = [
@@ -2625,6 +2850,9 @@ function buildWorkbook() {
     });
     return row;
   });
+  layout.gesamt = {
+    base: 7, ccCount: costCenters.length, prCount: projects.length, labCount: labs.length,
+  };
   const ws1 = XLSX.utils.aoa_to_sheet([header, ...rows]);
   ws1["!cols"] = header.map((h, i) => ({ wch: i === 6 ? 26 : i === 0 ? 12 : 14 }));
   XLSX.utils.book_append_sheet(wb, ws1, sanitizeSheetName("Gesamt", usedNames));
@@ -2643,7 +2871,9 @@ function buildWorkbook() {
       (e, pa) => Number((pa.minutes / 60).toFixed(2)),       // je Projekt SEINE eigene Zeit
       cc.id                                                  // nur Projekte dieser Kostenstelle
     );
-    XLSX.utils.book_append_sheet(wb, ws, sanitizeSheetName(cc.code, usedNames));
+    const ccSheetName = sanitizeSheetName(cc.code, usedNames);
+    layout.ccSheets[ccSheetName] = countBlocksIn(ws);
+    XLSX.utils.book_append_sheet(wb, ws, ccSheetName);
   });
 
   // ---- Safety net: project time that has NO cost-center allocation at all would otherwise be lost ----
@@ -2772,6 +3002,7 @@ function buildWorkbook() {
     ...labs.map(() => ({ wch: 8 })),         // je Labor
     { wch: 9 },                              // Summe
   ];
+  layout.laborBlocks = labBlocks.length;
   XLSX.utils.book_append_sheet(wb, wsLabor, sanitizeSheetName("Labor", usedNames));
 
   // Excel soll beim Öffnen einmal durchrechnen, damit alle Formeln aktuell sind.
@@ -2779,8 +3010,13 @@ function buildWorkbook() {
   wb.Workbook.CalcPr = { fullCalcOnLoad: true };
 
   const filename = `Arbeitszeit_Export_${todayStr()}.xlsx`;
-  XLSX.writeFile(wb, filename, { cellStyles: true });
-  toast("Excel-Datei wurde erstellt.");
+  writeStyledWorkbook(wb, filename, layout)
+    .then(() => toast("Excel-Datei wurde erstellt."))
+    .catch((err) => {
+      console.error("Formatierter Export fehlgeschlagen:", err);
+      XLSX.writeFile(wb, filename);   // wenigstens die Daten liefern
+      toast("Excel-Datei erstellt (ohne Formatierung).");
+    });
 }
 
 /* =========================================================
