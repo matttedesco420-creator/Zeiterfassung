@@ -377,7 +377,7 @@ let flow = { mode: null, editingId: null, draft: null }; // shared draft used by
    real credentials; otherwise the app stays purely local, exactly
    as before).
    ========================================================= */
-const APP_VERSION = "v36 (Arbeitgeber-Auswahl)";
+const APP_VERSION = "v37 (Umbenennen)";
 
 const SB = (window.SUPABASE_CONFIG && window.SUPABASE_CONFIG.url && window.SUPABASE_CONFIG.anonKey)
   ? supabase.createClient(window.SUPABASE_CONFIG.url, window.SUPABASE_CONFIG.anonKey, {
@@ -2068,6 +2068,7 @@ function renderEmployerGate() {
           <div class="employer-card-name">${escapeHtml(e.name)}</div>
           <div class="employer-card-meta">${ccCount} Kostenstelle(n) · ${enCount} Eintrag/Einträge</div>
         </div>
+        <button class="cc-del" data-employer-rename="${e.id}" aria-label="Umbenennen">✎</button>
         <button class="cc-del" data-employer-id="${e.id}" aria-label="Löschen">✕</button>
         <span class="employer-card-go">›</span>
       </div>`;
@@ -2075,12 +2076,30 @@ function renderEmployerGate() {
 
   container.querySelectorAll("[data-employer-open]").forEach((card) => {
     card.addEventListener("click", (ev) => {
-      if (ev.target.closest(".cc-del")) return;   // Löschen nicht als Auswahl werten
+      if (ev.target.closest(".cc-del")) return;   // Umbenennen/Löschen nicht als Auswahl werten
       switchEmployer(card.dataset.employerOpen);
     });
   });
 
-  container.querySelectorAll(".cc-del").forEach((btn) => {
+  container.querySelectorAll("[data-employer-rename]").forEach((btn) => {
+    btn.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      const emp = employers.find((e) => e.id === btn.dataset.employerRename);
+      const next = prompt("Neuer Name für den Arbeitgeber:", emp.name);
+      if (next === null) return;               // abgebrochen
+      const name = next.trim();
+      if (!name) { toast("Der Name darf nicht leer sein."); return; }
+      if (name === emp.name) return;
+      emp.name = name;
+      saveEmployers(employers);
+      pushEmployer(emp);
+      renderEmployerGate();
+      renderEmployerButton();
+      toast("Arbeitgeber umbenannt.");
+    });
+  });
+
+  container.querySelectorAll("[data-employer-id]").forEach((btn) => {
     btn.addEventListener("click", (ev) => {
       ev.stopPropagation();
       const id = btn.dataset.employerId;
