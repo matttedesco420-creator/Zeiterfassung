@@ -560,3 +560,51 @@ a { color: inherit; }
 .boot-logo { font-size: 34px; margin-bottom: 12px; }
 .boot-text { font-size: 14px; color: var(--text-faint); line-height: 1.5; }
 .boot-screen .btn-ghost { color: #fff; border-color: rgba(255,255,255,0.28); }
+
+/* ---------- Arbeitgeber: Auswahl-Bildschirm ---------- */
+.employer-gate {
+  position: fixed; inset: 0; z-index: 90;
+  background: var(--ink);
+  display: flex; align-items: center; justify-content: center;
+  padding: 24px; overflow-y: auto;
+}
+.employer-gate-inner { width: 100%; max-width: 420px; }
+.employer-gate-head { text-align: center; margin-bottom: 22px; }
+.employer-gate-logo { font-size: 34px; margin-bottom: 8px; }
+.employer-gate-title { font-size: 20px; font-weight: 700; color: #fff; margin: 0 0 8px; }
+.employer-gate-sub {
+  font-size: 13.5px; color: var(--text-faint); line-height: 1.5; margin: 0;
+}
+
+.employer-card {
+  display: flex; align-items: center; gap: 12px;
+  background: var(--surface); border: 1px solid transparent; border-radius: var(--radius);
+  padding: 15px 16px; margin-bottom: 10px; cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.employer-card:active { transform: scale(0.99); }
+.employer-card.active { border-color: var(--brass); }
+.employer-card-info { flex: 1; min-width: 0; }
+.employer-card-name { font-weight: 700; font-size: 15px; }
+.employer-card-meta { font-size: 12.5px; color: var(--text-soft); margin-top: 2px; }
+.employer-card-go { color: var(--text-faint); font-size: 18px; flex: none; }
+.employer-card .cc-del { color: var(--text-faint); }
+
+.employer-gate-form {
+  background: rgba(255,255,255,0.06); border-radius: var(--radius);
+  padding: 16px; margin-top: 20px;
+}
+.employer-gate-form label { color: var(--text-faint); }
+
+/* ---------- Arbeitgeber-Knopf in der Kopfzeile ---------- */
+.employer-button {
+  display: flex; align-items: baseline; gap: 5px;
+  background: none; border: none; padding: 0; cursor: pointer;
+  font-size: 17px; font-weight: 700; letter-spacing: -0.01em; color: var(--text);
+  max-width: 62%; text-align: left;
+}
+.employer-button > span:first-child {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.employer-button-caret { color: var(--text-faint); font-size: 13px; flex: none; }
+.employer-button:active { opacity: 0.6; }

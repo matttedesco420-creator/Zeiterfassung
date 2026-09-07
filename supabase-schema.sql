@@ -6,6 +6,13 @@
 
 -- ---------- Tabellen ----------
 
+create table if not exists public.employers (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  name text not null,
+  created_at timestamptz not null default now()
+);
+
 create table if not exists public.cost_centers (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references auth.users(id) on delete cascade,
@@ -87,6 +94,14 @@ alter table public.settings add column if not exists vacation_days_per_year nume
 
 -- ---------- Indizes ----------
 
+-- Arbeitgeber-Zuordnung (nachträglich ergänzbar, daher als eigene Anweisungen)
+alter table public.cost_centers add column if not exists employer_id uuid references public.employers(id) on delete cascade;
+alter table public.labs         add column if not exists employer_id uuid references public.employers(id) on delete cascade;
+alter table public.contracts    add column if not exists employer_id uuid references public.employers(id) on delete cascade;
+alter table public.entries      add column if not exists employer_id uuid references public.employers(id) on delete cascade;
+alter table public.vacations    add column if not exists employer_id uuid references public.employers(id) on delete cascade;
+
+create index if not exists employers_user_idx on public.employers(user_id);
 create index if not exists entries_user_date_idx on public.entries(user_id, date);
 create index if not exists cost_centers_user_idx on public.cost_centers(user_id);
 create index if not exists projects_user_idx on public.projects(user_id);
@@ -99,6 +114,7 @@ create index if not exists vacations_user_idx on public.vacations(user_id, start
 -- Jede Zeile gehört genau einem Nutzer (user_id = auth.uid()).
 -- Damit sehen/ändern Kolleg:innen nur ihre eigenen Daten, egal von welchem Gerät.
 
+alter table public.employers    enable row level security;
 alter table public.cost_centers enable row level security;
 alter table public.projects     enable row level security;
 alter table public.entries      enable row level security;
@@ -108,6 +124,10 @@ alter table public.contracts    enable row level security;
 alter table public.settings     enable row level security;
 
 -- "drop policy if exists" davor macht das Skript gefahrlos wiederholbar.
+drop policy if exists "own rows" on public.employers;
+create policy "own rows" on public.employers
+  for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
 drop policy if exists "own rows" on public.cost_centers;
 create policy "own rows" on public.cost_centers
   for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
@@ -145,7 +165,7 @@ create policy "own rows" on public.settings
 do $$
 declare t text;
 begin
-  foreach t in array array['cost_centers', 'projects', 'labs', 'contracts', 'entries', 'vacations', 'settings'] loop
+  foreach t in array array['employers', 'cost_centers', 'projects', 'labs', 'contracts', 'entries', 'vacations', 'settings'] loop
     if not exists (
       select 1 from pg_publication_tables
       where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = t
