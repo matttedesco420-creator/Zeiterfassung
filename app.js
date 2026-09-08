@@ -11,8 +11,6 @@ const K = {
   vacations: "azt_vacations_v1",
   labs: "azt_labs_v1",
   contracts: "azt_contracts_v1",
-  employers: "azt_employers_v1",
-  currentEmployer: "azt_current_employer_v1",
   timer: "azt_timer_v1",
 };
 
@@ -215,37 +213,12 @@ function loadContracts() {
 }
 function saveContracts(list) { localStorage.setItem(K.contracts, JSON.stringify(list)); }
 
-function loadEmployers() {
-  try { return JSON.parse(localStorage.getItem(K.employers)) || []; }
-  catch { return []; }
-}
-function saveEmployers(list) { localStorage.setItem(K.employers, JSON.stringify(list)); }
-function loadCurrentEmployerId() { return localStorage.getItem(K.currentEmployer) || null; }
-function saveCurrentEmployerId(id) {
-  if (id) localStorage.setItem(K.currentEmployer, id);
-  else localStorage.removeItem(K.currentEmployer);
-}
-
-/* Alle Listen sind nach Arbeitgeber getrennt. Diese Helfer liefern jeweils nur
-   die Daten des aktuell gewählten Arbeitgebers. */
-function ofEmployer(list) {
-  return list.filter((x) => x.employerId === currentEmployerId);
-}
-function currentCostCenters() { return ofEmployer(costCenters); }
-function currentProjects() {
-  const ccIds = new Set(currentCostCenters().map((c) => c.id));
-  return projects.filter((p) => ccIds.has(p.costCenterId));
-}
-function currentLabs() { return ofEmployer(labs); }
-function currentContracts() { return ofEmployer(contracts); }
-function currentEntries() { return ofEmployer(entries); }
-function currentVacations() { return ofEmployer(vacations); }
 
 /* Wochenstunden für einen konkreten Monat: der zugeordnete Vertrag gewinnt,
    sonst der Wert aus den Profildaten (Rückfallebene). */
 function weeklyHoursForMonth(year, monthIndex) {
   const key = `${year}-${String(monthIndex + 1).padStart(2, "0")}`;
-  const contract = currentContracts().find((c) => (c.months || []).includes(key));
+  const contract = contracts.find((c) => (c.months || []).includes(key));
   return contract && contract.weeklyHours != null ? Number(contract.weeklyHours) : 0;
 }
 /* Tagesstunden eines Monats (Arbeitswoche Mo–Fr). */
@@ -281,7 +254,7 @@ function vacationWeekdaysInRange(startISO, endISO) {
 /* Set of all ISO dates covered by any saved vacation range (weekdays only). */
 function vacationDateSet() {
   const set = new Set();
-  currentVacations().forEach((v) => vacationWeekdaysInRange(v.startDate, v.endDate).forEach((d) => set.add(d)));
+  vacations.forEach((v) => vacationWeekdaysInRange(v.startDate, v.endDate).forEach((d) => set.add(d)));
   return set;
 }
 
@@ -320,8 +293,6 @@ let profile = loadProfile();
 let vacations = loadVacations();
 let labs = loadLabs();
 let contracts = loadContracts();
-let employers = loadEmployers();
-let currentEmployerId = loadCurrentEmployerId();
 
 /* Einmalige Migration: Frühere Versionen vergaben Kurz-IDs (z. B. "m2x1k3f9abc").
    Supabase erwartet echte UUIDs, weshalb das Hochladen fehlschlug. Wir vergeben neue
@@ -377,7 +348,7 @@ let flow = { mode: null, editingId: null, draft: null }; // shared draft used by
    real credentials; otherwise the app stays purely local, exactly
    as before).
    ========================================================= */
-const APP_VERSION = "v37 (Umbenennen)";
+const APP_VERSION = "v38 (Stand v34)";
 
 const SB = (window.SUPABASE_CONFIG && window.SUPABASE_CONFIG.url && window.SUPABASE_CONFIG.anonKey)
   ? supabase.createClient(window.SUPABASE_CONFIG.url, window.SUPABASE_CONFIG.anonKey, {
@@ -415,12 +386,10 @@ function debounce(fn, wait) {
 
 /* ---- row <-> app-object mappers ---- */
 function rowToCostCenter(row) {
-  return { id: row.id, code: row.code, name: row.name, colorIndex: row.color_index,
-    employerId: row.employer_id || null };
+  return { id: row.id, code: row.code, name: row.name, colorIndex: row.color_index };
 }
 function costCenterToRow(cc) {
-  return { id: cc.id, user_id: currentUser.id, code: cc.code, name: cc.name,
-    color_index: cc.colorIndex, employer_id: cc.employerId || null };
+  return { id: cc.id, user_id: currentUser.id, code: cc.code, name: cc.name, color_index: cc.colorIndex };
 }
 function rowToProject(row) {
   return { id: row.id, code: row.code, name: row.name, colorIndex: row.color_index, costCenterId: row.cost_center_id };
@@ -432,7 +401,6 @@ function rowToEntry(row) {
   return {
     id: row.id, date: row.date, start: row.start, end: row.end,
     pauseStart: row.pause_start, pauseEnd: row.pause_end, activity: row.activity,
-    employerId: row.employer_id || null,
     totalMinutes: row.total_minutes, allocations: row.allocations || [],
     projectAllocations: row.project_allocations || [],
     laborAllocations: row.labor_allocations || [], laborMinutes: row.labor_minutes,
@@ -445,7 +413,6 @@ function entryToRow(e) {
   return {
     id: e.id, user_id: currentUser.id, date: e.date, start: e.start, end: e.end,
     pause_start: e.pauseStart, pause_end: e.pauseEnd, activity: e.activity || null,
-    employer_id: e.employerId || null,
     total_minutes: e.totalMinutes, allocations: e.allocations || [],
     project_allocations: e.projectAllocations || [],
     labor_allocations: e.laborAllocations || [], labor_minutes: e.laborMinutes,
@@ -483,7 +450,7 @@ async function pushLab(lab) {
   if (!SB || !currentUser) return;
   const { error } = await SB.from("labs").upsert({
     id: lab.id, user_id: currentUser.id, code: lab.code, name: lab.name,
-    color_index: lab.colorIndex, employer_id: lab.employerId || null,
+    color_index: lab.colorIndex,
   });
   if (error) { reportSyncError("Labor", error); queueRetry(() => pushLab(lab)); }
 }
@@ -492,24 +459,11 @@ async function deleteLabRemote(id) {
   const { error } = await SB.from("labs").delete().eq("id", id);
   if (error) queueRetry(() => deleteLabRemote(id));
 }
-async function pushEmployer(emp) {
-  if (!SB || !currentUser) return;
-  const { error } = await SB.from("employers").upsert({
-    id: emp.id, user_id: currentUser.id, name: emp.name,
-  });
-  if (error) { reportSyncError("Arbeitgeber", error); queueRetry(() => pushEmployer(emp)); }
-}
-async function deleteEmployerRemote(id) {
-  if (!SB || !currentUser) return;
-  const { error } = await SB.from("employers").delete().eq("id", id);
-  if (error) queueRetry(() => deleteEmployerRemote(id));
-}
 async function pushContract(c) {
   if (!SB || !currentUser) return;
   const { error } = await SB.from("contracts").upsert({
     id: c.id, user_id: currentUser.id, name: c.name,
     weekly_hours: c.weeklyHours, months: c.months || [],
-    employer_id: c.employerId || null,
   });
   if (error) { reportSyncError("Vertrag", error); queueRetry(() => pushContract(c)); }
 }
@@ -603,7 +557,7 @@ async function runDiagnostics() {
   lines.push(`Angemeldet: ${session.user.email}`);
   lines.push(`Benutzer-ID: ${session.user.id}`);
 
-  const tables = ["employers", "cost_centers", "projects", "labs", "contracts", "entries", "vacations", "settings"];
+  const tables = ["cost_centers", "projects", "labs", "contracts", "entries", "vacations", "settings"];
   for (const t of tables) {
     const res = await SB.from(t).select("*", { count: "exact", head: true });
     if (res.error) lines.push(`Tabelle ${t}: FEHLER – ${res.error.message}`);
@@ -644,8 +598,7 @@ function withTimeout(promise, ms, label) {
 async function fetchAllFromSupabase() {
   if (!SB || !currentUser) return;
   const T = 20000;
-  const [emRes, ccRes, prRes, laRes, coRes, enRes, vaRes, stRes] = await Promise.all([
-    withTimeout(SB.from("employers").select("*").order("created_at"), T, "Arbeitgeber"),
+  const [ccRes, prRes, laRes, coRes, enRes, vaRes, stRes] = await Promise.all([
     withTimeout(SB.from("cost_centers").select("*").order("created_at"), T, "Kostenstellen"),
     withTimeout(SB.from("projects").select("*").order("created_at"), T, "Projekte"),
     withTimeout(SB.from("labs").select("*").order("created_at"), T, "Labore"),
@@ -655,7 +608,7 @@ async function fetchAllFromSupabase() {
     withTimeout(SB.from("settings").select("*").eq("user_id", currentUser.id).maybeSingle(), T, "Profil"),
   ]);
 
-  const failed = [emRes, ccRes, prRes, laRes, coRes, enRes, vaRes].filter((r) => r.error);
+  const failed = [ccRes, prRes, laRes, coRes, enRes, vaRes].filter((r) => r.error);
   if (failed.length) {
     console.error("Supabase-Ladefehler:", failed.map((r) => r.error));
     toast("Daten konnten nicht geladen werden – lokale Daten bleiben erhalten.");
@@ -677,21 +630,16 @@ async function fetchAllFromSupabase() {
     return mapped;
   };
 
-  employers = adopt(emRes.data, employers,
-    (r) => ({ id: r.id, name: r.name }), saveEmployers);
   costCenters = adopt(ccRes.data, costCenters, rowToCostCenter, saveCostCenters);
   projects = adopt(prRes.data, projects, rowToProject, saveProjects);
   labs = adopt(laRes.data, labs,
-    (r) => ({ id: r.id, code: r.code, name: r.name, colorIndex: r.color_index,
-              employerId: r.employer_id || null }), saveLabs);
+    (r) => ({ id: r.id, code: r.code, name: r.name, colorIndex: r.color_index }), saveLabs);
   contracts = adopt(coRes.data, contracts,
-    (r) => ({ id: r.id, name: r.name, weeklyHours: r.weekly_hours, months: r.months || [],
-              employerId: r.employer_id || null }),
+    (r) => ({ id: r.id, name: r.name, weeklyHours: r.weekly_hours, months: r.months || [] }),
     saveContracts);
   entries = adopt(enRes.data, entries, rowToEntry, saveEntries);
   vacations = adopt(vaRes.data, vacations,
-    (r) => ({ id: r.id, startDate: r.start_date, endDate: r.end_date,
-              employerId: r.employer_id || null }), saveVacations);
+    (r) => ({ id: r.id, startDate: r.start_date, endDate: r.end_date }), saveVacations);
 
   if (needsUpload) {
     try { await bulkReplaceRemote(); }
@@ -720,7 +668,6 @@ function subscribeRealtime() {
     .on("postgres_changes", { event: "*", schema: "public", table: "vacations", filter }, handleRemoteChange)
     .on("postgres_changes", { event: "*", schema: "public", table: "labs", filter }, handleRemoteChange)
     .on("postgres_changes", { event: "*", schema: "public", table: "contracts", filter }, handleRemoteChange)
-    .on("postgres_changes", { event: "*", schema: "public", table: "employers", filter }, handleRemoteChange)
     .on("postgres_changes", { event: "*", schema: "public", table: "settings", filter }, handleRemoteChange)
     .subscribe();
 }
@@ -807,23 +754,11 @@ async function onLoggedIn() {
       reportSyncError("Datenübernahme", err);
     }
   }
-  await ensureEmployer();
-  if (!appInitialized) { wireEvents(); renderTopbarDate(); registerServiceWorker(); appInitialized = true; }
+  dedupeGeneralProjects();
+  await ensureGeneralProjects();
+  if (!appInitialized) { init(); appInitialized = true; }
+  else { renderAll(); renderTimer(); renderTopbarDate(); }
   subscribeRealtime();
-  /* Zuerst den Arbeitgeber wählen – erst danach läuft die App wie gewohnt,
-     dann aber ausschließlich mit dessen Daten. */
-  if (!currentEmployerId) {
-    document.getElementById("app-shell").style.display = "none";
-    showEmployerGate();
-  } else {
-    dedupeGeneralProjects();
-    await ensureGeneralProjects();
-    hideEmployerGate();
-    document.getElementById("app-shell").style.display = "";
-    renderEmployerButton();
-    renderAll();
-    renderTimer();
-  }
 }
 
 /* Prüft Schritt für Schritt, wo das Speichern scheitert, und zeigt die Original-Fehler an. */
@@ -848,7 +783,7 @@ async function runDiagnostics() {
   log(`✓ Angemeldet als ${sess.session.user.email}`);
   log(`  user_id: ${sess.session.user.id}`);
 
-  const tables = ["employers", "cost_centers", "projects", "labs", "contracts", "entries", "vacations", "settings"];
+  const tables = ["cost_centers", "projects", "labs", "contracts", "entries", "vacations", "settings"];
   log("\n--- Tabellen lesen ---");
   const missing = [];
   for (const t of tables) {
@@ -1133,7 +1068,7 @@ function stopTick() {
    ========================================================= */
 function renderTodaySummary() {
   const container = document.getElementById("today-summary");
-  const todays = currentEntries().filter((e) => e.date === todayStr());
+  const todays = entries.filter((e) => e.date === todayStr());
 
   if (todays.length === 0) {
     container.innerHTML = `
@@ -1228,7 +1163,7 @@ function buildSummaryCardHTML(list) {
    ========================================================= */
 function renderEntries() {
   const container = document.getElementById("entries-list");
-  const list = currentEntries();
+  const list = entries;
   if (list.length === 0) {
     container.innerHTML = `
       <div class="empty-state">
@@ -1681,7 +1616,6 @@ function saveAllocation() {
     pauseEnd: flow.draft.pauseEnd,
     totalMinutes: flow.draft.totalMinutes,
     allocations, projectAllocations, laborAllocations, laborMinutes,
-    employerId: flow.draft.employerId || currentEmployerId,
     source: flow.draft.source || (flow.mode === "timer-finish" ? "timer" : "manual"),
     createdAt: flow.draft.createdAt || Date.now(),
     updatedAt: Date.now(),
@@ -1705,7 +1639,7 @@ function saveAllocation() {
    ========================================================= */
 function renderCostCenters() {
   const container = document.getElementById("costcenter-list");
-  const list = currentCostCenters();
+  const list = costCenters;
   if (list.length === 0) {
     container.innerHTML = `
       <div class="empty-state">
@@ -1754,8 +1688,7 @@ function renderCostCenters() {
 }
 
 function addCostCenter(code, name) {
-  const cc = { id: uid(), code: code.toUpperCase(), name,
-    colorIndex: currentCostCenters().length, employerId: currentEmployerId };
+  const cc = { id: uid(), code: code.toUpperCase(), name, colorIndex: costCenters.length };
   costCenters.push(cc);
   saveCostCenters(costCenters);
   pushCostCenter(cc);
@@ -1764,43 +1697,6 @@ function addCostCenter(code, name) {
   addProject("ALLG", "Allgemein", cc.id);
   renderCostCenters();
   renderProjects();
-}
-
-/* Legt beim ersten Start einen Arbeitgeber an und ordnet ihm alle bisherigen Daten zu.
-   Ohne das wären vorhandene Einträge nach der Umstellung unsichtbar. */
-async function ensureEmployer() {
-  if (employers.length === 0) {
-    const first = { id: uid(), name: "Mein Arbeitgeber" };
-    employers.push(first);
-    saveEmployers(employers);
-    await pushEmployer(first);
-  }
-  if (currentEmployerId && !employers.some((e) => e.id === currentEmployerId)) {
-    currentEmployerId = null;         // gelöschter Arbeitgeber -> Auswahl erzwingen
-    saveCurrentEmployerId(null);
-  }
-  // Bestandsdaten ohne Zuordnung dem ersten Arbeitgeber zuschlagen
-  const fallback = employers[0].id;
-  let changed = false;
-  const assign = (list, saveFn) => {
-    let touched = false;
-    list.forEach((x) => { if (!x.employerId) { x.employerId = fallback; touched = true; } });
-    if (touched) { saveFn(list); changed = true; }
-    return touched;
-  };
-  const a1 = assign(costCenters, saveCostCenters);
-  const a2 = assign(labs, saveLabs);
-  const a3 = assign(contracts, saveContracts);
-  const a4 = assign(entries, saveEntries);
-  const a5 = assign(vacations, saveVacations);
-  if (changed) {
-    if (a1) costCenters.forEach((x) => pushCostCenter(x));
-    if (a2) labs.forEach((x) => pushLab(x));
-    if (a3) contracts.forEach((x) => pushContract(x));
-    if (a4) entries.forEach((x) => pushEntry(x));
-    if (a5) vacations.forEach((x) => pushVacation(x));
-  }
-  return changed;
 }
 
 /* Ergänzt fehlende "Allgemein"-Projekte bei bereits bestehenden Kostenstellen. */
@@ -1815,7 +1711,7 @@ function isGeneralProject(p) {
    bereits erfasste Zeiten werden auf dieses umgehängt, damit nichts verloren geht. */
 function dedupeGeneralProjects() {
   let changed = false;
-  currentCostCenters().forEach((cc) => {
+  costCenters.forEach((cc) => {
     const generals = projects.filter((p) => p.costCenterId === cc.id && isGeneralProject(p));
     if (generals.length < 2) return;
     const keep = generals[0];
@@ -1843,7 +1739,7 @@ function dedupeGeneralProjects() {
 
 async function ensureGeneralProjects() {
   const fresh = [];
-  currentCostCenters().forEach((cc) => {
+  costCenters.forEach((cc) => {
     const hasGeneral = projects.some((p) => p.costCenterId === cc.id && isGeneralProject(p));
     if (!hasGeneral) {
       const pr = {
@@ -1868,7 +1764,7 @@ async function ensureGeneralProjects() {
 function renderProjects() {
   const container = document.getElementById("project-list");
   populateProjectCostCenterSelect();
-  const list = currentProjects();
+  const list = projects;
   if (list.length === 0) {
     container.innerHTML = `
       <div class="empty-state">
@@ -1879,10 +1775,10 @@ function renderProjects() {
   }
   container.innerHTML = list.map((pr) => {
     const color = PROJECT_PALETTE[pr.colorIndex % PROJECT_PALETTE.length];
-    const options = currentCostCenters().map((cc) =>
+    const options = costCenters.map((cc) =>
       `<option value="${cc.id}" ${cc.id === pr.costCenterId ? "selected" : ""}>${escapeHtml(cc.code)}</option>`
     ).join("");
-    const missing = !currentCostCenters().some((c) => c.id === pr.costCenterId);
+    const missing = !costCenters.some((c) => c.id === pr.costCenterId);
     return `
       <div class="cc-row">
         <span class="cc-swatch" style="background:${color};"></span>
@@ -1933,11 +1829,11 @@ function populateProjectCostCenterSelect() {
   const submitBtn = document.querySelector("#form-project button[type=submit]");
   const prevValue = select.value;
 
-  select.innerHTML = currentCostCenters()
+  select.innerHTML = costCenters
     .map((cc) => `<option value="${cc.id}">${escapeHtml(cc.code)} — ${escapeHtml(cc.name)}</option>`)
     .join("");
 
-  if (currentCostCenters().length === 0) {
+  if (costCenters.length === 0) {
     noCcHint.style.display = "block";
     select.disabled = true;
     if (submitBtn) submitBtn.disabled = true;
@@ -1945,7 +1841,7 @@ function populateProjectCostCenterSelect() {
     noCcHint.style.display = "none";
     select.disabled = false;
     if (submitBtn) submitBtn.disabled = false;
-    if (currentCostCenters().some((c) => c.id === prevValue)) select.value = prevValue;
+    if (costCenters.some((c) => c.id === prevValue)) select.value = prevValue;
   }
 }
 
@@ -1980,7 +1876,7 @@ function readLabAllocRows() {
    ========================================================= */
 function renderLabs() {
   const container = document.getElementById("lab-list");
-  const list = currentLabs();
+  const list = labs;
   if (list.length === 0) {
     container.innerHTML = `
       <div class="empty-state">
@@ -2014,7 +1910,6 @@ function renderLabs() {
       labs = labs.filter((l) => l.id !== id);
       saveLabs(labs);
       saveContracts(contracts);
-      saveEmployers(employers);
       renderAll();
       toast("Labor gelöscht.");
       deleteLabRemote(id);
@@ -2023,135 +1918,11 @@ function renderLabs() {
 }
 
 function addLab(code, name) {
-  const lab = { id: uid(), code: code.toUpperCase(), name,
-    colorIndex: currentLabs().length, employerId: currentEmployerId };
+  const lab = { id: uid(), code: code.toUpperCase(), name, colorIndex: labs.length };
   labs.push(lab);
   saveLabs(labs);
   renderLabs();
   pushLab(lab);
-}
-
-/* =========================================================
-   EMPLOYERS (oberste Ebene: alles hängt an genau einem Arbeitgeber)
-   ========================================================= */
-function showEmployerGate() {
-  renderEmployerGate();
-  document.getElementById("employer-gate").style.display = "flex";
-}
-function hideEmployerGate() {
-  document.getElementById("employer-gate").style.display = "none";
-}
-
-/* Name des aktuellen Arbeitgebers in der Kopfzeile */
-function renderEmployerButton() {
-  const el = document.getElementById("employer-current");
-  if (!el) return;
-  const emp = employers.find((e) => e.id === currentEmployerId);
-  el.textContent = emp ? emp.name : "Arbeitgeber";
-}
-
-/* Liste im Auswahl-Bildschirm */
-function renderEmployerGate() {
-  const container = document.getElementById("employer-gate-list");
-  if (!container) return;
-  if (employers.length === 0) {
-    container.innerHTML = `<p class="employer-gate-sub">Lege unten deinen ersten Arbeitgeber an.</p>`;
-    return;
-  }
-  container.innerHTML = employers.map((e) => {
-    const ccCount = costCenters.filter((c) => c.employerId === e.id).length;
-    const enCount = entries.filter((x) => x.employerId === e.id).length;
-    const active = e.id === currentEmployerId;
-    return `
-      <div class="employer-card${active ? " active" : ""}" data-employer-open="${e.id}">
-        <div class="employer-card-info">
-          <div class="employer-card-name">${escapeHtml(e.name)}</div>
-          <div class="employer-card-meta">${ccCount} Kostenstelle(n) · ${enCount} Eintrag/Einträge</div>
-        </div>
-        <button class="cc-del" data-employer-rename="${e.id}" aria-label="Umbenennen">✎</button>
-        <button class="cc-del" data-employer-id="${e.id}" aria-label="Löschen">✕</button>
-        <span class="employer-card-go">›</span>
-      </div>`;
-  }).join("");
-
-  container.querySelectorAll("[data-employer-open]").forEach((card) => {
-    card.addEventListener("click", (ev) => {
-      if (ev.target.closest(".cc-del")) return;   // Umbenennen/Löschen nicht als Auswahl werten
-      switchEmployer(card.dataset.employerOpen);
-    });
-  });
-
-  container.querySelectorAll("[data-employer-rename]").forEach((btn) => {
-    btn.addEventListener("click", (ev) => {
-      ev.stopPropagation();
-      const emp = employers.find((e) => e.id === btn.dataset.employerRename);
-      const next = prompt("Neuer Name für den Arbeitgeber:", emp.name);
-      if (next === null) return;               // abgebrochen
-      const name = next.trim();
-      if (!name) { toast("Der Name darf nicht leer sein."); return; }
-      if (name === emp.name) return;
-      emp.name = name;
-      saveEmployers(employers);
-      pushEmployer(emp);
-      renderEmployerGate();
-      renderEmployerButton();
-      toast("Arbeitgeber umbenannt.");
-    });
-  });
-
-  container.querySelectorAll("[data-employer-id]").forEach((btn) => {
-    btn.addEventListener("click", (ev) => {
-      ev.stopPropagation();
-      const id = btn.dataset.employerId;
-      const emp = employers.find((e) => e.id === id);
-      const enCount = entries.filter((x) => x.employerId === id).length;
-      const msg = `Arbeitgeber „${emp.name}" löschen?\n\n`
-        + `Dabei werden auch alle zugehörigen Kostenstellen, Projekte, Labore, Verträge, `
-        + `Urlaube und ${enCount} Eintrag/Einträge unwiderruflich gelöscht.`;
-      if (!confirm(msg)) return;
-
-      const ccIds = new Set(costCenters.filter((c) => c.employerId === id).map((c) => c.id));
-      projects = projects.filter((p) => !ccIds.has(p.costCenterId));
-      costCenters = costCenters.filter((c) => c.employerId !== id);
-      labs = labs.filter((l) => l.employerId !== id);
-      contracts = contracts.filter((c) => c.employerId !== id);
-      entries = entries.filter((e) => e.employerId !== id);
-      vacations = vacations.filter((v) => v.employerId !== id);
-      employers = employers.filter((e) => e.id !== id);
-      saveProjects(projects); saveCostCenters(costCenters); saveLabs(labs);
-      saveContracts(contracts); saveEntries(entries); saveVacations(vacations);
-      saveEmployers(employers);
-      if (currentEmployerId === id) {
-        currentEmployerId = employers.length ? employers[0].id : null;
-        saveCurrentEmployerId(currentEmployerId);
-      }
-      deleteEmployerRemote(id);
-      renderEmployerGate();
-      renderAll();
-      toast("Arbeitgeber gelöscht.");
-    });
-  });
-}
-
-function addEmployer(name) {
-  const emp = { id: uid(), name };
-  employers.push(emp);
-  saveEmployers(employers);
-  pushEmployer(emp);
-  renderEmployerGate();
-}
-
-function switchEmployer(id) {
-  if (!employers.some((e) => e.id === id)) return;
-  currentEmployerId = id;
-  saveCurrentEmployerId(id);
-  ensureGeneralProjects();
-  hideEmployerGate();
-  document.getElementById("app-shell").style.display = "";
-  renderEmployerButton();
-  renderAll();
-  renderTimer();
-  switchView("view-timer");
 }
 
 /* =========================================================
@@ -2162,8 +1933,8 @@ let contractMonthSelection = new Set();
 function contractYears() {
   const now = new Date().getFullYear();
   const years = new Set([now - 1, now, now + 1]);
-  currentEntries().forEach((e) => years.add(Number(e.date.slice(0, 4))));
-  currentContracts().forEach((c) => (c.months || []).forEach((m) => years.add(Number(m.slice(0, 4)))));
+  entries.forEach((e) => years.add(Number(e.date.slice(0, 4))));
+  contracts.forEach((c) => (c.months || []).forEach((m) => years.add(Number(m.slice(0, 4)))));
   return [...years].sort();
 }
 
@@ -2179,7 +1950,7 @@ function renderContractMonthGrid() {
   const year = document.getElementById("contract-year").value;
   grid.innerHTML = MONTHS_AT.map((m, i) => {
     const key = `${year}-${String(i + 1).padStart(2, "0")}`;
-    const takenBy = currentContracts().find((c) => (c.months || []).includes(key));
+    const takenBy = contracts.find((c) => (c.months || []).includes(key));
     const classes = ["month-chip"];
     if (contractMonthSelection.has(key)) classes.push("selected");
     if (takenBy) classes.push("taken");
@@ -2201,7 +1972,7 @@ function renderContracts() {
   renderContractYearSelect();
   renderContractMonthGrid();
   const container = document.getElementById("contract-list");
-  const list = currentContracts();
+  const list = contracts;
   if (list.length === 0) {
     container.innerHTML = `
       <div class="empty-state">
@@ -2235,7 +2006,6 @@ function renderContracts() {
       if (!confirm(`Vertrag „${c.name}" löschen?`)) return;
       contracts = contracts.filter((x) => x.id !== id);
       saveContracts(contracts);
-      saveEmployers(employers);
       renderContracts();
       renderVacationOverview();
       toast("Vertrag gelöscht.");
@@ -2247,10 +2017,9 @@ function renderContracts() {
 function addContract(name, weeklyHours, months) {
   // Ein Monat kann nur zu einem Vertrag gehören – bei Überschneidung gewinnt der neue.
   contracts.forEach((c) => {
-    if (c.employerId !== currentEmployerId) return;   // andere Arbeitgeber unangetastet
     c.months = (c.months || []).filter((m) => !months.includes(m));
   });
-  const contract = { id: uid(), name, weeklyHours, months, employerId: currentEmployerId };
+  const contract = { id: uid(), name, weeklyHours, months };
   contracts.push(contract);
   saveContracts(contracts);
   contracts.forEach((c) => pushContract(c));
@@ -2296,7 +2065,7 @@ function renderVacationOverview() {
 
     sumSoll += soll; sumIst += ist; sumVacSoll += vacSoll; sumVacIst += vacIst;
 
-    const contract = currentContracts().find((c) => (c.months || []).includes(prefix));
+    const contract = contracts.find((c) => (c.months || []).includes(prefix));
     const diff = ist - soll;
     const istClass = soll > 0 && Math.abs(diff) > 0.01 ? (diff > 0 ? "over" : "under") : "";
 
@@ -2348,7 +2117,7 @@ function renderVacationOverview() {
    ========================================================= */
 function renderVacations() {
   const container = document.getElementById("vacation-list");
-  const list = currentVacations();
+  const list = vacations;
   if (list.length === 0) {
     container.innerHTML = `
       <div class="empty-state">
@@ -2360,7 +2129,7 @@ function renderVacations() {
 
   // Genommene Stunden je Monat über ALLE Urlaube – Basis für den Restanspruch.
   const takenByMonth = {};
-  currentVacations().forEach((v) => {
+  vacations.forEach((v) => {
     vacationWeekdaysInRange(v.startDate, v.endDate).forEach((d) => {
       const key = d.slice(0, 7);
       takenByMonth[key] = (takenByMonth[key] || 0) + dailyHoursForDate(d);
@@ -2408,7 +2177,6 @@ function renderVacations() {
       saveVacations(vacations);
       saveLabs(labs);
       saveContracts(contracts);
-      saveEmployers(employers);
       renderVacations();
       renderVacationOverview();
       toast("Urlaub gelöscht.");
@@ -2444,7 +2212,7 @@ function updateVacationHint() {
 }
 
 function addVacation(startDate, endDate) {
-  const v = { id: uid(), startDate, endDate, employerId: currentEmployerId };
+  const v = { id: uid(), startDate, endDate };
   vacations.push(v);
   saveVacations(vacations);
   renderVacations();
@@ -2473,7 +2241,7 @@ function updateExportRangeHint() {
     hint.textContent = "Das Bis-Datum liegt vor dem Von-Datum.";
     hint.className = "hint warn"; return;
   }
-  const count = currentEntries().filter((e) => inExportRange(e.date, { from, to })).length;
+  const count = entries.filter((e) => inExportRange(e.date, { from, to })).length;
   hint.textContent = `${count} Eintrag/Einträge im gewählten Zeitraum.`;
   hint.className = count > 0 ? "hint ok" : "hint warn";
 }
@@ -2490,16 +2258,15 @@ function renderExportStats() {
     }
   }
   const container = document.getElementById("export-stats");
-  const scoped = currentEntries();
-  const totalMinutes = scoped.reduce((s, e) => s + e.totalMinutes, 0);
-  const laborMinutes = scoped.reduce((s, e) => s + (e.laborMinutes || 0), 0);
+  const totalMinutes = entries.reduce((s, e) => s + e.totalMinutes, 0);
+  const laborMinutes = entries.reduce((s, e) => s + (e.laborMinutes || 0), 0);
   container.innerHTML = `
-    <div class="stat-box"><div class="n">${scoped.length}</div><div class="l">Einträge gesamt</div></div>
+    <div class="stat-box"><div class="n">${entries.length}</div><div class="l">Einträge gesamt</div></div>
     <div class="stat-box"><div class="n">${fmtHoursDecimal(totalMinutes)} h</div><div class="l">Erfasste Arbeitszeit</div></div>
-    <div class="stat-box"><div class="n">${currentCostCenters().length}</div><div class="l">Kostenstellen</div></div>
-    <div class="stat-box"><div class="n">${currentProjects().length}</div><div class="l">Projekte</div></div>
-    <div class="stat-box"><div class="n">${currentLabs().length}</div><div class="l">Labore</div></div>
-    <div class="stat-box"><div class="n">${currentContracts().length}</div><div class="l">Verträge</div></div>
+    <div class="stat-box"><div class="n">${costCenters.length}</div><div class="l">Kostenstellen</div></div>
+    <div class="stat-box"><div class="n">${projects.length}</div><div class="l">Projekte</div></div>
+    <div class="stat-box"><div class="n">${labs.length}</div><div class="l">Labore</div></div>
+    <div class="stat-box"><div class="n">${contracts.length}</div><div class="l">Verträge</div></div>
     <div class="stat-box"><div class="n">${fmtHoursDecimal(laborMinutes)} h</div><div class="l">davon Labor</div></div>
   `;
 }
@@ -3020,28 +2787,21 @@ function exportExcel() {
   if (range.from && range.to && range.to < range.from) {
     toast("Das Bis-Datum liegt vor dem Von-Datum."); return;
   }
-  /* Export enthält ausschließlich den aktuell gewählten Arbeitgeber. */
-  const exportEntries = currentEntries().filter((e) => inExportRange(e.date, range));
+  const exportEntries = entries.filter((e) => inExportRange(e.date, range));
   if (exportEntries.length === 0) {
     toast("Im gewählten Zeitraum gibt es keine Einträge."); return;
   }
-  // Alle Listen für die Dauer des Exports auf den Arbeitgeber (und Zeitraum) einschränken.
-  const backup = { entries, vacations, costCenters, projects, labs, contracts };
+  const allEntries = entries;
+  const allVacations = vacations;
   entries = exportEntries;
-  vacations = currentVacations().filter((v) =>
+  vacations = vacations.filter((v) =>
     inExportRange(v.startDate, range) || inExportRange(v.endDate, range));
-  costCenters = currentCostCenters();
-  projects = currentProjects();
-  labs = currentLabs();
-  contracts = currentContracts();
 
   try {
     buildWorkbook();
   } finally {
-    // Ansicht der App bleibt unverändert
-    entries = backup.entries; vacations = backup.vacations;
-    costCenters = backup.costCenters; projects = backup.projects;
-    labs = backup.labs; contracts = backup.contracts;
+    entries = allEntries;   // Ansicht der App bleibt unverändert
+    vacations = allVacations;
   }
 }
 
@@ -3257,9 +3017,7 @@ function buildWorkbook() {
   wb.Workbook = wb.Workbook || {};
   wb.Workbook.CalcPr = { fullCalcOnLoad: true };
 
-  const emp = employers.find((e) => e.id === currentEmployerId);
-  const empPart = emp ? "_" + emp.name.replace(/[^\wäöüÄÖÜß-]+/g, "_").slice(0, 30) : "";
-  const filename = `Arbeitszeit_Export${empPart}_${todayStr()}.xlsx`;
+  const filename = `Arbeitszeit_Export_${todayStr()}.xlsx`;
   writeStyledWorkbook(wb, filename, layout)
     .then(() => toast("Excel-Datei wurde erstellt."))
     .catch((err) => {
@@ -3273,7 +3031,7 @@ function buildWorkbook() {
    Backup import / export (JSON)
    ========================================================= */
 function exportJSON() {
-  const data = { employers, entries, costCenters, projects, labs, contracts, vacations, exportedAt: new Date().toISOString() };
+  const data = { entries, costCenters, projects, labs, contracts, vacations, exportedAt: new Date().toISOString() };
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
@@ -3296,14 +3054,12 @@ function importJSON(file) {
       vacations = Array.isArray(data.vacations) ? data.vacations : [];
       labs = Array.isArray(data.labs) ? data.labs : [];
       contracts = Array.isArray(data.contracts) ? data.contracts : [];
-      employers = Array.isArray(data.employers) ? data.employers : [];
       saveEntries(entries);
       saveCostCenters(costCenters);
       saveProjects(projects);
       saveVacations(vacations);
       saveLabs(labs);
       saveContracts(contracts);
-      saveEmployers(employers);
       renderAll();
       toast("Backup importiert.");
       bulkReplaceRemote();
@@ -3318,11 +3074,10 @@ function resetAll() {
   if (!confirm("Wirklich ALLE Einträge und Kostenstellen unwiderruflich löschen?")) return;
   if (!confirm("Bist du sicher? Dieser Schritt kann nicht rückgängig gemacht werden.")) return;
   entries = []; costCenters = []; projects = []; labs = []; contracts = []; vacations = [];
-  employers = []; currentEmployerId = null; saveCurrentEmployerId(null);
   timer = { status: "idle" };
   saveEntries(entries); saveCostCenters(costCenters); saveProjects(projects);
   saveLabs(labs); saveContracts(contracts); saveVacations(vacations);
-  saveEmployers(employers); saveTimer(timer);
+  saveTimer(timer);
   renderAll();
   toast("Alle Daten wurden gelöscht.");
   bulkReplaceRemote();
@@ -3353,7 +3108,6 @@ function switchView(id) {
 }
 
 function renderAll() {
-  renderEmployerButton();
   renderTodaySummary();
   renderEntries();
   renderCostCenters();
@@ -3409,19 +3163,6 @@ function wireEvents() {
     openTimesSheet(flow.mode, flow.draft);
   });
   document.getElementById("btn-alloc-save").addEventListener("click", saveAllocation);
-
-  document.getElementById("btn-switch-employer").addEventListener("click", () => {
-    document.getElementById("app-shell").style.display = "none";
-    showEmployerGate();
-  });
-  document.getElementById("form-employer").addEventListener("submit", (ev) => {
-    ev.preventDefault();
-    const name = document.getElementById("employer-name").value.trim();
-    if (!name) return;
-    addEmployer(name);
-    document.getElementById("form-employer").reset();
-    toast("Arbeitgeber hinzugefügt.");
-  });
 
   document.getElementById("form-costcenter").addEventListener("submit", (ev) => {
     ev.preventDefault();
@@ -3607,10 +3348,8 @@ document.addEventListener("DOMContentLoaded", () => {
     initAuth();
   } else {
     hideBootScreen();
-    ensureEmployer().then(() => {
-      if (!currentEmployerId) showEmployerGate();
-      else { dedupeGeneralProjects(); ensureGeneralProjects(); renderEmployerButton(); }
-    });
+    dedupeGeneralProjects();
+    ensureGeneralProjects();
     document.getElementById("app-shell").style.display = "";
     const accountBtn = document.getElementById("btn-account");
     accountBtn.style.display = "flex";
